@@ -3,6 +3,7 @@ import json
 import requests
 import ccxt
 import pandas as pd
+from tradingview_ta import TA_Handler, Interval
 from ai_analyzer import ai_evaluate_market_candidates
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
@@ -30,6 +31,22 @@ def save_active_signals(signals):
             json.dump(signals, f, indent=4)
     except Exception as e:
         print(f"Error saving active signals: {e}")
+
+def get_tradingview_recommendation(symbol):
+    """ TradingView Free Analysis Summary එක ලබා ගැනීම """
+    try:
+        clean_sym = symbol.replace('/', '')
+        handler = TA_Handler(
+            symbol=clean_sym,
+            screener="crypto",
+            exchange="MEXC",
+            interval=Interval.INTERVAL_15_MINUTES
+        )
+        analysis = handler.get_analysis()
+        return analysis.summary.get('RECOMMENDATION', 'NEUTRAL')
+    except Exception as e:
+        print(f"⚠️ TradingView TA Error for {symbol}: {e}")
+        return "NEUTRAL"
 
 def calculate_ema(df, length):
     return df['close'].ewm(span=length, adjust=False).mean()
@@ -64,10 +81,10 @@ def scan_new_signals():
     active_signals = load_active_signals()
     
     if len(active_signals) >= MAX_ACTIVE_SIGNALS:
-        print(f"⏸️ Active signal slots full ({len(active_signals)}/{MAX_ACTIVE_SIGNALS}). Skipping AI scan.")
+        print(f"⏸️ Active signal slots full ({len(active_signals)}/{MAX_ACTIVE_SIGNALS}). Skipping scan.")
         return
 
-    print(f"🧠 Gathering market data for AI Analysis... (Active Slots: {len(active_signals)}/{MAX_ACTIVE_SIGNALS})")
+    print(f"🧠 Gathering Market & TradingView Data... (Active Slots: {len(active_signals)}/{MAX_ACTIVE_SIGNALS})")
     
     active_symbols = [s['symbol'] for s in active_signals]
     tickers = exchange.fetch_tickers()
@@ -92,6 +109,9 @@ def scan_new_signals():
             curr = df.iloc[-1]
             prev = df.iloc[-2]
 
+            # Live TradingView Recommendation
+            tv_rec = get_tradingview_recommendation(symbol)
+
             market_candidates.append({
                 "symbol": symbol,
                 "price": curr['close'],
@@ -100,16 +120,17 @@ def scan_new_signals():
                 "ema9": round(curr['EMA_FAST'], 4),
                 "ema21": round(curr['EMA_SLOW'], 4),
                 "ema_cross": "BULLISH_CROSS" if (prev['EMA_FAST'] <= prev['EMA_SLOW'] and curr['EMA_FAST'] > curr['EMA_SLOW']) else ("BEARISH_CROSS" if (prev['EMA_FAST'] >= prev['EMA_SLOW'] and curr['EMA_FAST'] < curr['EMA_SLOW']) else "NONE"),
-                "atr": round(curr['ATR'], 6)
+                "atr": round(curr['ATR'], 6),
+                "tradingview_summary": tv_rec
             })
         except Exception:
             continue
 
     if not market_candidates:
-        print("⚠️ No valid candidates fetched.")
+        print("⚠️ No valid market candidates fetched.")
         return
 
-    # 🤖 AI එකට Market Data යවා Single Best Trade එක තෝරාගැනීම
+    # 🤖 TradingView + Market Data AI Evaluation
     ai_raw_res = ai_evaluate_market_candidates(market_candidates)
     
     if not ai_raw_res or "NO_TRADE" in ai_raw_res:
@@ -117,7 +138,6 @@ def scan_new_signals():
         return
 
     try:
-        # Clean JSON String from AI Response
         clean_json = ai_raw_res.replace("```json", "").replace("```", "").strip()
         ai_decision = json.loads(clean_json)
 
@@ -125,13 +145,13 @@ def scan_new_signals():
         side = ai_decision['side']
         reason = ai_decision.get('reason', 'AI High Conviction Setup')
 
-        # Selected Coin එකේ Full Technical Details ලබා ගැනීම
         selected_data = next((c for c in market_candidates if c['symbol'] == selected_symbol), None)
         if not selected_data:
             return
 
         entry = selected_data['price']
         atr_val = selected_data['atr']
+        tv_rating = selected_data.get('tradingview_summary', 'N/A')
 
         tp1 = entry + (atr_val * 2.0) if "LONG" in side else entry - (atr_val * 2.0)
         tp2 = entry + (atr_val * 4.0) if "LONG" in side else entry - (atr_val * 4.0)
@@ -155,14 +175,15 @@ def scan_new_signals():
         p = 4 if entry >= 1 else 6
 
         msg = f"""
-🧠 **AI SMART VIP SIGNAL** 🔥
-*(Selected by Gemini AI Quant Engine)*
+📊 **TRADINGVIEW + AI VIP SIGNAL** 🔥
+*(TradingView Technicals + Gemini AI Analysis)*
 
 📌 **Pair:** #{clean_symbol}
 📊 **Action:** {side}
 🎯 **Entry Price:** `{entry:.{p}f}`
 
-💡 **AI Setup Reason:** {reason}
+📈 **TV Recommendation:** `{tv_rating}`
+💡 **AI Reason:** {reason}
 
 💰 **Take-Profit Targets:**
 1️⃣ TP1: `{tp1:.{p}f}`
@@ -176,7 +197,7 @@ def scan_new_signals():
 🤖 *AI Copilot Active for Live Monitoring!*
 """
         send_telegram_msg(msg)
-        print(f"✅ AI Selected and Sent Signal for {clean_symbol}!")
+        print(f"✅ AI Selected and Sent Signal for {clean_symbol} (TV Rating: {tv_rating})!")
 
     except Exception as e:
         print(f"❌ Failed to parse AI decision JSON: {e}")
