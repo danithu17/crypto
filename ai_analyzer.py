@@ -11,7 +11,6 @@ def call_gemini_api(prompt):
         print("⚠️ Gemini API Key missing in Secrets!")
         return None
 
-    # 🔄 API Versions සහ Working Models ලැයිස්තුව
     api_configs = [
         ("v1beta", "gemini-2.5-flash"),
         ("v1beta", "gemini-2.0-flash"),
@@ -32,35 +31,37 @@ def call_gemini_api(prompt):
                 res_data = response.json()
                 time.sleep(1) # Rate limit guard
                 return res_data['candidates'][0]['content']['parts'][0]['text']
-            else:
-                print(f"⚠️ [{api_version}/{model}] Failed ({response.status_code}). Retrying next config...")
-        except Exception as e:
-            print(f"❌ Exception with {model}: {e}")
+        except Exception:
+            continue
 
-    print("❌ All Gemini API configs failed. Please verify GEMINI_API_KEY secret in GitHub.")
+    print("❌ All Gemini API configs failed.")
     return None
 
 def ai_evaluate_market_candidates(candidates_data):
-    """ Market Candidate Analysis """
+    """ Market Data + TradingView Technical Recommendations විශ්ලේෂණය කිරීම """
     prompt = f"""
     You are an Expert Crypto Quant Trader AI.
-    Analyze these market candidates:
+    Analyze these market candidates gathered from 15m timeframe data, including TradingView technical recommendations:
 
     {json.dumps(candidates_data, indent=2)}
 
-    Select ONLY ONE best setup (>80% win probability). If none, respond with "NO_TRADE".
-    If valid, return ONLY JSON:
+    Task:
+    1. Select ONLY ONE best high-probability trade candidate (LONG or SHORT) with a win probability > 80%.
+    2. Give strong preference if TradingView recommendation is 'STRONG_BUY' (for LONG) or 'STRONG_SELL' (for SHORT) and aligns with EMA/RSI trend.
+    3. If no candidate has a strong setup, explicitly respond with: "NO_TRADE".
+    4. If a solid setup is found, return ONLY a valid JSON object in this exact format (no markdown formatting):
+
     {{
         "symbol": "BTC/USDT",
         "side": "LONG 🟢" or "SHORT 🔴",
-        "reason": "1 short sentence explanation",
+        "reason": "1 short sentence explanation referencing TradingView rating and momentum",
         "confidence": 85
     }}
     """
     return call_gemini_api(prompt)
 
 def get_ai_trade_decision(signal, current_price, rsi, ema_fast, ema_slow):
-    """ Active Trade Live Analysis """
+    """ Active Trade එක AI එක හරහා Live Monitor කිරීම """
     side = signal['side']
     entry = signal['entry']
     pnl_pct = ((current_price - entry) / entry) * 100 if "LONG" in side else ((entry - current_price) / entry) * 100
@@ -78,7 +79,19 @@ def get_ai_trade_decision(signal, current_price, rsi, ema_fast, ema_slow):
     - Current 15m RSI: {rsi:.2f}
     - EMA 9: {ema_fast:.4f} | EMA 21: {ema_slow:.4f}
 
-    Generate a short, attractive Telegram VIP update with emojis.
-    Provide Action Recommendation (🟢 HOLD & WAIT, 🎯 MOVE SL TO ENTRY, 💰 TAKE PARTIAL PROFIT, 🔴 CLOSE POSITION NOW) and 1 sentence reason.
+    Instructions:
+    Generate a short, attractive, professional Telegram VIP update message in English with emojis.
+    Determine Action Recommendation: (🟢 HOLD & WAIT, 🎯 MOVE SL TO ENTRY, 💰 TAKE PARTIAL PROFIT, 🔴 CLOSE POSITION NOW).
+    Provide 1 sentence reason explaining WHY based on RSI/Price movement.
+
+    Output format:
+    🤖 **AI TRADE MANAGEMENT UPDATE** 🤖
+
+    📌 **Pair:** #{signal['symbol'].replace('/', '')}
+    📊 **Status:** [Action Recommendation]
+    📈 **Current PnL:** {pnl_pct:+.2f}%
+
+    💡 **AI Analysis:** [1 sentence explanation]
+    🛡️ **Action Plan:** [Clear instructions for members]
     """
     return call_gemini_api(prompt)
