@@ -80,40 +80,74 @@ def monitor_trades():
             current_price = curr['close']
             side = signal['side']
             sl = signal['sl']
+            tp1 = signal['tp1']
+            tp2 = signal['tp2']
+            tp3 = signal['tp3']
             tp4 = signal['tp4']
+            
+            clean_symbol = symbol.replace('/', '')
+            p = 4 if current_price >= 1 else 6
 
-            # 1. Stop Loss Hit Check
+            # 🛑 1. STOP LOSS CHECK
             if ("LONG" in side and current_price <= sl) or ("SHORT" in side and current_price >= sl):
-                msg = f"🛑 **TRADE CLOSED (STOP LOSS HIT)** 🛑\n\n📌 **Pair:** #{symbol.replace('/', '')}\n❌ Price hit Stop Loss at {current_price:.4f}. Risk Managed!"
+                msg = f"🛑 **TRADE CLOSED (STOP LOSS HIT)** 🛑\n\n📌 **Pair:** #{clean_symbol}\n❌ Price hit Stop Loss at `{current_price:.{p}f}`. Risk Managed!"
                 send_telegram_msg(msg)
                 print(f"🗑️ SL Hit for {symbol}. Trade removed.")
-                continue  # Remaining list එකට එකතු නොකරයි (Closed)
+                continue  # Trade එක Close නිසා ලිස්ට් එකට එකතු නොවේ
 
-            # 2. Final TP Hit Check
-            if ("LONG" in side and current_price >= tp4) or ("SHORT" in side and current_price <= tp4):
-                msg = f"🎯 **ALL TARGETS ACHIEVED! (TP4 HIT)** 🚀\n\n📌 **Pair:** #{symbol.replace('/', '')}\n💰 Maximum Profit Unlocked at {current_price:.4f}!"
-                send_telegram_msg(msg)
-                print(f"🗑️ TP4 Hit for {symbol}. Trade removed.")
-                continue  # Remaining list එකට එකතු නොකරයි (Closed)
+            # 🎯 2. STEP-BY-STEP TP TARGETS CHECK
+            if "LONG" in side:
+                if not signal.get('tp1_hit') and current_price >= tp1:
+                    signal['tp1_hit'] = True
+                    send_telegram_msg(f"🎯 **TP1 TARGET ACHIEVED!** 🚀\n\n📌 **Pair:** #{clean_symbol}\n💰 Price reached TP1 Target at `{current_price:.{p}f}`!")
 
-            # 3. AI Analysis & Updates
+                if not signal.get('tp2_hit') and current_price >= tp2:
+                    signal['tp2_hit'] = True
+                    send_telegram_msg(f"🎯 **TP2 TARGET ACHIEVED!** 🚀\n\n📌 **Pair:** #{clean_symbol}\n💰 Price reached TP2 Target at `{current_price:.{p}f}`!")
+
+                if not signal.get('tp3_hit') and current_price >= tp3:
+                    signal['tp3_hit'] = True
+                    send_telegram_msg(f"🎯 **TP3 TARGET ACHIEVED!** 🚀\n\n📌 **Pair:** #{clean_symbol}\n💰 Price reached TP3 Target at `{current_price:.{p}f}`!")
+
+                if current_price >= tp4:
+                    send_telegram_msg(f"🎯 **ALL TARGETS ACHIEVED (TP4 HIT)!** 🚀🔥\n\n📌 **Pair:** #{clean_symbol}\n💰 Maximum Profit Unlocked at `{current_price:.{p}f}`!")
+                    print(f"🗑️ TP4 Hit for {symbol}. Trade removed.")
+                    continue  # Completed!
+
+            elif "SHORT" in side:
+                if not signal.get('tp1_hit') and current_price <= tp1:
+                    signal['tp1_hit'] = True
+                    send_telegram_msg(f"🎯 **TP1 TARGET ACHIEVED!** 🚀\n\n📌 **Pair:** #{clean_symbol}\n💰 Price reached TP1 Target at `{current_price:.{p}f}`!")
+
+                if not signal.get('tp2_hit') and current_price <= tp2:
+                    signal['tp2_hit'] = True
+                    send_telegram_msg(f"🎯 **TP2 TARGET ACHIEVED!** 🚀\n\n📌 **Pair:** #{clean_symbol}\n💰 Price reached TP2 Target at `{current_price:.{p}f}`!")
+
+                if not signal.get('tp3_hit') and current_price <= tp3:
+                    signal['tp3_hit'] = True
+                    send_telegram_msg(f"🎯 **TP3 TARGET ACHIEVED!** 🚀\n\n📌 **Pair:** #{clean_symbol}\n💰 Price reached TP3 Target at `{current_price:.{p}f}`!")
+
+                if current_price <= tp4:
+                    send_telegram_msg(f"🎯 **ALL TARGETS ACHIEVED (TP4 HIT)!** 🚀🔥\n\n📌 **Pair:** #{clean_symbol}\n💰 Maximum Profit Unlocked at `{current_price:.{p}f}`!")
+                    print(f"🗑️ TP4 Hit for {symbol}. Trade removed.")
+                    continue  # Completed!
+
+            # 🤖 3. AI ANALYSIS & PERIODIC UPDATES
             ai_msg = get_ai_trade_decision(signal, current_price, curr['RSI'], curr['EMA_FAST'], curr['EMA_SLOW'])
             
             if ai_msg:
                 last_status = signal.get('last_status', '')
                 is_hold = "HOLD & WAIT" in ai_msg.upper()
 
-                # Anti-Spam Check
                 if is_hold and last_status == "HOLD & WAIT":
-                    print(f"⏳ Status for {symbol} still 'HOLD & WAIT'. Skipping message.")
+                    print(f"⏳ Status for {symbol} still 'HOLD & WAIT'. Skipping duplicate message.")
                 else:
                     send_telegram_msg(ai_msg)
                     signal['last_status'] = "HOLD & WAIT" if is_hold else "ACTION_TAKEN"
 
-                # AI Close Recommendation
                 if "CLOSE POSITION NOW" in ai_msg.upper():
                     print(f"🔴 AI advised to close {symbol}. Trade removed.")
-                    continue  # Closed
+                    continue
 
             remaining_signals.append(signal)
 
@@ -121,7 +155,6 @@ def monitor_trades():
             print(f"❌ Error monitoring {symbol}: {e}")
             remaining_signals.append(signal)
 
-    # Updated remaining list එක Save කිරීම
     save_active_signals(remaining_signals)
 
 if __name__ == '__main__':
