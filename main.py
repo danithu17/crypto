@@ -1,37 +1,41 @@
 import os
+import json
 import random
 import requests
 import ccxt
 import pandas as pd
 
 # ==================== CONFIGURATION ====================
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN_HERE")
-CHAT_ID = os.environ.get("CHAT_ID", "@YOUR_TELEGRAM_CHANNEL_USERNAME")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+CHAT_ID = os.environ.get("CHAT_ID", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 TOP_COINS_LIMIT = 30 
 TIMEFRAME = '15m' 
-
-# Signal එකක් valid වෙන්න ඕන අවම Score එක (0 - 100)
-MINIMUM_SIGNAL_SCORE = 70 
+ACTIVE_SIGNAL_FILE = 'active_signal.json'
 
 exchange = ccxt.mexc({'enableRateLimit': True})
 
-# ==================== DYNAMIC COIN SELECTION ====================
-def get_top_volume_symbols(limit=30):
+# ==================== STATE MANAGEMENT ====================
+def load_active_signal():
+    if os.path.exists(ACTIVE_SIGNAL_FILE):
+        try:
+            with open(ACTIVE_SIGNAL_FILE, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Error loading active signal file: {e}")
+    return None
+
+def save_active_signal(signal_data):
     try:
-        tickers = exchange.fetch_tickers()
-        usdt_pairs = {}
-        for symbol, ticker in tickers.items():
-            if symbol.endswith('/USDT') and '3L' not in symbol and '3S' not in symbol:
-                quote_vol = ticker.get('quoteVolume', 0)
-                if quote_vol is not None and quote_vol > 0:
-                    usdt_pairs[symbol] = quote_vol
-        
-        sorted_symbols = sorted(usdt_pairs, key=usdt_pairs.get, reverse=True)
-        return sorted_symbols[:limit]
+        with open(ACTIVE_SIGNAL_FILE, 'w') as f:
+            json.dump(signal_data, f, indent=4)
     except Exception as e:
-        print(f"⚠️ Error fetching coins: {e}")
-        return ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT', 'DOGE/USDT', 'AVAX/USDT']
+        print(f"Error saving active signal file: {e}")
+
+def clear_active_signal():
+    if os.path.exists(ACTIVE_SIGNAL_FILE):
+        os.remove(ACTIVE_SIGNAL_FILE)
 
 # ==================== TECHNICAL INDICATORS ====================
 def calculate_ema(df, length):
@@ -64,163 +68,184 @@ def send_telegram_msg(message):
         print(f"❌ Telegram Error: {e}")
         return False
 
-# ==================== ENGAGEMENT / REACTION POSTS ====================
-def send_random_engagement():
-    messages = [
-        "📊 **Market Scan Complete!** Currently monitoring Top 30 pairs for high-probability setups. Stay tuned! 🔥",
-        "💡 **VIP Trading Tip:** Never risk more than 2% of your portfolio on a single 10x-20x trade. Risk management is key! 🛡️",
-        "⚡ **Market Update:** High volatility detected in Altcoins! React with 🔥 if you are active right now!",
-        "🎯 **Target Locked:** Our scanner is tracking potential breakouts. Get ready for the next setup! 🚀"
-    ]
-    # 25% chance of posting engagement if no signals found
-    if random.random() < 0.25:
-        msg = random.choice(messages)
-        send_telegram_msg(msg)
+# ==================== AI DECISION ENGINE (GEMINI AI) ====================
+def get_ai_trade_decision(signal, current_price, rsi, ema_fast, ema_slow):
+    """ Google Gemini AI Model එක පාවිච්චි කරමින් Live Position Decision එකක් ගැනීම """
+    if not GEMINI_API_KEY:
+        print("⚠️ Gemini API Key missing! Fallback to standard tracking.")
+        return None
 
-# ==================== PRE-ENTRY ALERT ====================
-def send_watchlist_alert(symbol, direction):
-    clean_symbol = symbol.replace('/', '')
-    msg = f"""
-👀 **WATCHLIST ALERT** 👀
-
-📌 **Pair:** #{clean_symbol}
-📈 **Potential Direction:** {direction}
-⚡ **Status:** EMA Crossover is forming on 15m Chart!
-
-⚠️ *Get your exchange ready! Formal VIP Signal coming soon if confirmed.*
-"""
-    send_telegram_msg(msg)
-
-# ==================== VIP SIGNAL SENDER ====================
-def send_vip_signal(signal):
-    symbol = signal['symbol']
     side = signal['side']
     entry = signal['entry']
-    tp1, tp2, tp3, tp4 = signal['tp1'], signal['tp2'], signal['tp3'], signal['tp4']
-    sl = signal['sl']
-    score = signal['score']
+    pnl_pct = ((current_price - entry) / entry) * 100 if "LONG" in side else ((entry - current_price) / entry) * 100
     
-    clean_symbol = symbol.replace('/', '')
-    precision = 4 if entry >= 1 else 6
+    prompt = f"""
+    You are a professional Crypto VIP Trading Assistant AI. Analyze this active trade:
 
-    msg = f"""
-🔥 **VIP CRYPTO SIGNAL** 🔥
-*(Signal Quality Score: {score}/100 ⭐️)*
+    - Pair: {signal['symbol']}
+    - Position Side: {side}
+    - Entry Price: {entry}
+    - Current Live Price: {current_price}
+    - PnL Percentage: {pnl_pct:.2f}%
+    - TP1: {signal['tp1']} | TP2: {signal['tp2']} | TP3: {signal['tp3']} | TP4: {signal['tp4']}
+    - Stop Loss: {signal['sl']}
+    - Current 15m RSI: {rsi:.2f}
+    - EMA 9: {ema_fast:.4f} | EMA 21: {ema_slow:.4f}
 
-📌 **Pair:** #{clean_symbol}
-📊 **Action:** {side}
-🎯 **Entry Price:** {entry:.{precision}f}
+    Instructions:
+    Generate a short, attractive, professional Telegram VIP update message in English with emojis.
+    Determine the primary AI Recommendation Action: (Options: 🟢 HOLD & WAIT, 🎯 MOVE SL TO ENTRY, 💰 TAKE PARTIAL PROFIT, 🔴 CLOSE POSITION NOW).
+    Provide 1 sentence reason explaining WHY based on RSI/Price movement.
 
-💰 **Take-Profit Targets:**
-1️⃣ TP1: {tp1:.{precision}f}
-2️⃣ TP2: {tp2:.{precision}f}
-3️⃣ TP3: {tp3:.{precision}f}
-4️⃣ TP4: {tp4:.{precision}f}
+    Output format:
+    🤖 **AI TRADE MANAGEMENT UPDATE** 🤖
 
-🛡️ **Stop Loss:** {sl:.{precision}f}
-⚡ **Leverage:** 10x - 20x
+    📌 **Pair:** #{signal['symbol'].replace('/', '')}
+    📊 **Status:** [Action Recommendation]
+    📈 **Current PnL:** {pnl_pct:+.2f}%
 
-⚠️ *Advice: Move SL to Entry after TP1 hits!*
-"""
-    send_telegram_msg(msg)
+    💡 **AI Analysis:** [1 sentence explanation]
+    🛡️ **Action Plan:** [Clear instructions for members]
+    """
 
-# ==================== MARKET SCANNER & WISE DECISION ENGINE ====================
-def check_signals():
-    print("🔍 Fetching target markets...")
-    symbols = get_top_volume_symbols(TOP_COINS_LIMIT)
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+        headers = {'Content-Type': 'application/json'}
+        payload = {"contents": [{"parts": [{"text": prompt}]}]}
+        
+        response = requests.post(url, json=payload, headers=headers)
+        if response.status_code == 200:
+            res_data = response.json()
+            ai_text = res_data['candidates'][0]['content']['parts'][0]['text']
+            return ai_text
+        else:
+            print(f"❌ AI Error: {response.text}")
+            return None
+    except Exception as e:
+        print(f"❌ AI Exception: {e}")
+        return None
+
+# ==================== MANAGING OPEN ACTIVE TRADE ====================
+def manage_active_trade(signal):
+    symbol = signal['symbol']
+    print(f"🔄 Managing Active AI Trade for {symbol}...")
     
+    try:
+        bars = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=50)
+        df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        
+        df['EMA_FAST'] = calculate_ema(df, 9)
+        df['EMA_SLOW'] = calculate_ema(df, 21)
+        df['RSI'] = calculate_rsi(df, 14)
+        
+        curr = df.iloc[-1]
+        current_price = curr['close']
+        
+        side = signal['side']
+        sl = signal['sl']
+        tp4 = signal['tp4']
+
+        # 1. Stop Loss Hit Check
+        if ("LONG" in side and current_price <= sl) or ("SHORT" in side and current_price >= sl):
+            msg = f"🛑 **TRADE CLOSED (STOP LOSS HIT)** 🛑\n\n📌 **Pair:** #{symbol.replace('/', '')}\n❌ Price hit Stop Loss at {current_price:.4f}. Risk Managed!"
+            send_telegram_msg(msg)
+            clear_active_signal()
+            return
+
+        # 2. Final TP Hit Check
+        if ("LONG" in side and current_price >= tp4) or ("SHORT" in side and current_price <= tp4):
+            msg = f"🎯 **ALL TARGETS ACHIEVED! (TP4 HIT)** 🚀\n\n📌 **Pair:** #{symbol.replace('/', '')}\n💰 Maximum Profit Unlocked at {current_price:.4f}!"
+            send_telegram_msg(msg)
+            clear_active_signal()
+            return
+
+        # 3. AI Powered Decision Update
+        ai_msg = get_ai_trade_decision(signal, current_price, curr['RSI'], curr['EMA_FAST'], curr['EMA_SLOW'])
+        if ai_msg:
+            send_telegram_msg(ai_msg)
+        else:
+            print("Could not get AI decision.")
+
+    except Exception as e:
+        print(f"❌ Error managing trade {symbol}: {e}")
+
+# ==================== SCANNING NEW SIGNALS ====================
+def scan_new_signals():
+    print("🔍 Fetching target markets for new setup...")
+    tickers = exchange.fetch_tickers()
+    usdt_pairs = {k: v.get('quoteVolume', 0) for k, v in tickers.items() if k.endswith('/USDT') and '3L' not in k and '3S' not in k}
+    sorted_symbols = sorted(usdt_pairs, key=usdt_pairs.get, reverse=True)[:TOP_COINS_LIMIT]
+
     valid_signals = []
-    watchlist_candidates = []
 
-    for symbol in symbols:
+    for symbol in sorted_symbols:
         try:
-            bars = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=100)
+            bars = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=50)
             df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
-            df['EMA_FAST'] = calculate_ema(df, 9)   
+            df['EMA_FAST'] = calculate_ema(df, 9)
             df['EMA_SLOW'] = calculate_ema(df, 21)
-            df['EMA_TREND'] = calculate_ema(df, 50)
-            df['RSI'] = calculate_rsi(df, 14)       
+            df['RSI'] = calculate_rsi(df, 14)
             df['ATR'] = calculate_atr(df, 14)
-            df['VOL_MA'] = df['volume'].rolling(20).mean()
 
             curr = df.iloc[-1]
             prev = df.iloc[-2]
-
             close_price = curr['close']
             atr_val = curr['ATR']
 
-            # --- 1. FULL SIGNAL CONDITIONS ---
-            long_cross = (prev['EMA_FAST'] <= prev['EMA_SLOW']) and (curr['EMA_FAST'] > curr['EMA_SLOW'])
-            short_cross = (prev['EMA_FAST'] >= prev['EMA_SLOW']) and (curr['EMA_FAST'] < curr['EMA_SLOW'])
+            long_cross = (prev['EMA_FAST'] <= prev['EMA_SLOW']) and (curr['EMA_FAST'] > curr['EMA_SLOW']) and (curr['RSI'] > 50)
+            short_cross = (prev['EMA_FAST'] >= prev['EMA_SLOW']) and (curr['EMA_FAST'] < curr['EMA_SLOW']) and (curr['RSI'] < 50)
 
-            # --- 2. PRE-ENTRY ALERT CONDITIONS (EMA diff < 0.1%) ---
-            ema_gap = abs(curr['EMA_FAST'] - curr['EMA_SLOW']) / curr['close']
-            if ema_gap < 0.001 and not long_cross and not short_cross:
-                direction = "LONG 🟢" if curr['EMA_FAST'] > curr['EMA_SLOW'] else "SHORT 🔴"
-                watchlist_candidates.append({'symbol': symbol, 'direction': direction})
-
-            if long_cross or short_cross:
-                # --- WISE SCORE CALCULATION (0 - 100) ---
-                score = 50 # Base Score
-
-                # Volume Surge Bonus (+20)
-                if curr['volume'] > (curr['VOL_MA'] * 1.3):
-                    score += 20
-                
-                # Trend Alignment Bonus (+15)
-                if long_cross and close_price > curr['EMA_TREND']:
-                    score += 15
-                elif short_cross and close_price < curr['EMA_TREND']:
-                    score += 15
-
-                # RSI Momentum Bonus (+15)
-                if long_cross and (55 <= curr['RSI'] <= 70):
-                    score += 15
-                elif short_cross and (30 <= curr['RSI'] <= 45):
-                    score += 15
-
-                if score >= MINIMUM_SIGNAL_SCORE:
-                    if long_cross:
-                        valid_signals.append({
-                            'symbol': symbol, 'side': "LONG 🟢", 'entry': close_price,
-                            'tp1': close_price + (atr_val * 2.0),
-                            'tp2': close_price + (atr_val * 4.0),
-                            'tp3': close_price + (atr_val * 6.0),
-                            'tp4': close_price + (atr_val * 8.0),
-                            'sl': close_price - (atr_val * 2.0),
-                            'score': score
-                        })
-                    elif short_cross:
-                        valid_signals.append({
-                            'symbol': symbol, 'side': "SHORT 🔴", 'entry': close_price,
-                            'tp1': close_price - (atr_val * 2.0),
-                            'tp2': close_price - (atr_val * 4.0),
-                            'tp3': close_price - (atr_val * 6.0),
-                            'tp4': close_price - (atr_val * 8.0),
-                            'sl': close_price + (atr_val * 2.0),
-                            'score': score
-                        })
-
+            if long_cross:
+                valid_signals.append({
+                    'symbol': symbol, 'side': "LONG 🟢", 'entry': close_price,
+                    'tp1': close_price + (atr_val * 2.0), 'tp2': close_price + (atr_val * 4.0),
+                    'tp3': close_price + (atr_val * 6.0), 'tp4': close_price + (atr_val * 8.0),
+                    'sl': close_price - (atr_val * 2.0)
+                })
+            elif short_cross:
+                valid_signals.append({
+                    'symbol': symbol, 'side': "SHORT 🔴", 'entry': close_price,
+                    'tp1': close_price - (atr_val * 2.0), 'tp2': close_price - (atr_val * 4.0),
+                    'tp3': close_price - (atr_val * 6.0), 'tp4': close_price - (atr_val * 8.0),
+                    'sl': close_price + (atr_val * 2.0)
+                })
         except Exception as e:
-            print(f"Error checking {symbol}: {e}")
+            continue
 
-    # ==================== EXECUTION DECISION ====================
     if valid_signals:
-        # 🌟 Wise Decision: Pick ONLY THE SINGLE BEST SIGNAL (Highest Score)
-        best_signal = max(valid_signals, key=lambda x: x['score'])
-        print(f"🎯 Selected Best Signal: {best_signal['symbol']} with Score {best_signal['score']}")
-        send_vip_signal(best_signal)
-    
-    elif watchlist_candidates:
-        # 🌟 Send Watchlist Pre-Alert if potential setup forms
-        alert = random.choice(watchlist_candidates)
-        print(f"👀 Sending Watchlist Pre-alert for {alert['symbol']}")
-        send_watchlist_alert(alert['symbol'], alert['direction'])
-    
-    else:
-        # 🌟 Send random engagement post if no signals/alerts
-        send_random_engagement()
+        best_signal = valid_signals[0] # Pick top quality
+        save_active_signal(best_signal)
+        
+        clean_symbol = best_signal['symbol'].replace('/', '')
+        p = 4 if best_signal['entry'] >= 1 else 6
+        
+        msg = f"""
+🔥 **VIP CRYPTO SIGNAL** 🔥
 
+📌 **Pair:** #{clean_symbol}
+📊 **Action:** {best_signal['side']}
+🎯 **Entry Price:** {best_signal['entry']:.{p}f}
+
+💰 **Take-Profit Targets:**
+1️⃣ TP1: {best_signal['tp1']:.{p}f}
+2️⃣ TP2: {best_signal['tp2']:.{p}f}
+3️⃣ TP3: {best_signal['tp3']:.{p}f}
+4️⃣ TP4: {best_signal['tp4']:.{p}f}
+
+🛡️ **Stop Loss:** {best_signal['sl']:.{p}f}
+⚡ **Leverage:** 10x - 20x
+
+🤖 *AI Trade Copilot initialized to monitor this trade!*
+"""
+        send_telegram_msg(msg)
+
+# ==================== MAIN EXECUTION ====================
 if __name__ == '__main__':
-    check_signals()
+    active_signal = load_active_signal()
+    if active_signal:
+        # Open Trade එකක් තියෙනවා නම් AI එකෙන් ඒක Monitor කරනවා
+        manage_active_trade(active_signal)
+    else:
+        # Open Trade එකක් නැත්නම් අලුත් Best Signal එකක් හොයනවා
+        scan_new_signals()
