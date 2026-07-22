@@ -1,38 +1,44 @@
-from flask import Flask
-from threading import Thread
 import os
-import time
 import requests
 import ccxt
 import pandas as pd
-import pandas_ta as ta
-
-# ==================== FLASK SERVER (FOR FREE RENDER HOSTING) ====================
-app = Flask('')
-
-@app.route('/')
-def home():
-    return "✅ AlgoTrend Bot is Running 24/7 Online!"
-
-def run_flask():
-    # Render එකෙන් auto assign කරන Port එක ගන්නවා
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
-
-def keep_alive():
-    t = Thread(target=run_flask)
-    t.start()
 
 # ==================== CONFIGURATION ====================
-BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN_HERE" 
-CHAT_ID = "@YOUR_TELEGRAM_CHANNEL_USERNAME" 
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN_HERE")
+CHAT_ID = os.environ.get("CHAT_ID", "@YOUR_TELEGRAM_CHANNEL_USERNAME")
 
 SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT'] 
 TIMEFRAME = '15m' 
 
-last_signals = {symbol: None for symbol in SYMBOLS}
 exchange = ccxt.binance({'enableRateLimit': True})
 
+# ==================== TECHNICAL INDICATORS (PURE PANDAS) ====================
+def calculate_ema(df, length):
+    """ Calculates Exponential Moving Average (EMA) """
+    return df['close'].ewm(span=length, adjust=False).mean()
+
+def calculate_rsi(df, length=14):
+    """ Calculates Relative Strength Index (RSI) """
+    delta = df['close'].diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    
+    avg_gain = gain.ewm(alpha=1/length, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1/length, adjust=False).mean()
+    
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+def calculate_atr(df, length=14):
+    """ Calculates Average True Range (ATR) """
+    high_low = df['high'] - df['low']
+    high_close = (df['high'] - df['close'].shift()).abs()
+    low_close = (df['low'] - df['close'].shift()).abs()
+    
+    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
+    return tr.ewm(alpha=1/length, adjust=False).mean()
+
+# ==================== TELEGRAM NOTIFIER ====================
 def send_telegram_signal(symbol, side, entry, tp1, tp2, sl):
     message = f"""
 🚀 **AUTOMATED CRYPTO SIGNAL** 🚀
@@ -56,10 +62,13 @@ def send_telegram_signal(symbol, side, entry, tp1, tp2, sl):
     try:
         response = requests.post(url, json=payload)
         if response.status_code == 200:
-            print(f"✅ [{symbol}] Signal sent successfully!")
+            print(f"✅ [{symbol}] Signal successfully sent to Telegram!")
+        else:
+            print(f"❌ Failed to send Telegram message: {response.text}")
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"❌ Error sending message: {e}")
 
+# ==================== MARKET SCANNER ====================
 def check_signals():
     print("🔍 Scanning market data...")
     for symbol in SYMBOLS:
@@ -67,10 +76,11 @@ def check_signals():
             bars = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=100)
             df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
-            df['EMA_FAST'] = ta.ema(df['close'], length=9)   
-            df['EMA_SLOW'] = ta.ema(df['close'], length=21)  
-            df['RSI'] = ta.rsi(df['close'], length=14)       
-            df['ATR'] = ta.atr(df['high'], df['low'], df['close'], length=14) 
+            # Pure Pandas Indicator Calculations
+            df['EMA_FAST'] = calculate_ema(df, 9)   
+            df['EMA_SLOW'] = calculate_ema(df, 21)  
+            df['RSI'] = calculate_rsi(df, 14)       
+            df['ATR'] = calculate_atr(df, 14) 
 
             curr = df.iloc[-1]
             prev = df.iloc[-2]
@@ -78,36 +88,26 @@ def check_signals():
             close_price = curr['close']
             atr_val = curr['ATR']
 
+            # Trading Logic Conditions
             long_condition = (prev['EMA_FAST'] <= prev['EMA_SLOW']) and (curr['EMA_FAST'] > curr['EMA_SLOW']) and (curr['RSI'] > 50)
             short_condition = (prev['EMA_FAST'] >= prev['EMA_SLOW']) and (curr['EMA_FAST'] < curr['EMA_SLOW']) and (curr['RSI'] < 50)
 
-            if long_condition and last_signals[symbol] != 'LONG':
+            if long_condition:
                 entry = close_price
                 sl = entry - (atr_val * 1.5)
                 tp1 = entry + (atr_val * 1.5)
                 tp2 = entry + (atr_val * 3.0)
                 send_telegram_signal(symbol, "LONG 🟢", entry, tp1, tp2, sl)
-                last_signals[symbol] = 'LONG'
 
-            elif short_condition and last_signals[symbol] != 'SHORT':
+            elif short_condition:
                 entry = close_price
                 sl = entry + (atr_val * 1.5)
                 tp1 = entry - (atr_val * 1.5)
                 tp2 = entry - (atr_val * 3.0)
                 send_telegram_signal(symbol, "SHORT 🔴", entry, tp1, tp2, sl)
-                last_signals[symbol] = 'SHORT'
 
         except Exception as e:
             print(f"❌ Error checking {symbol}: {e}")
 
-# ==================== MAIN LOOP ====================
 if __name__ == '__main__':
-    # 1. Background Web Server එක Start කිරීම
-    keep_alive()
-    
-    print("🚀 Free Crypto Signal Bot Started...")
-    
-    # 2. Main Signal Loop එක Start කිරීම
-    while True:
-        check_signals()
-        time.sleep(60)
+    check_signals()
