@@ -1,6 +1,3 @@
-flask
+requests
 ccxt
 pandas
-pandas-ta
-requests
-python-dotenv
