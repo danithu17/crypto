@@ -3,13 +3,14 @@ import json
 import requests
 import ccxt
 import pandas as pd
+from ai_analyzer import ai_evaluate_market_candidates
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
-TOP_COINS_LIMIT = 30 
+TOP_COINS_LIMIT = 25 
 TIMEFRAME = '15m' 
 ACTIVE_SIGNAL_FILE = 'active_signal.json'
-MAX_ACTIVE_SIGNALS = 2  # 🎯 එකපාර දිවෙන උපරිම Active Signals ගණන
+MAX_ACTIVE_SIGNALS = 2
 
 exchange = ccxt.mexc({'enableRateLimit': True})
 
@@ -18,10 +19,7 @@ def load_active_signals():
         try:
             with open(ACTIVE_SIGNAL_FILE, 'r') as f:
                 data = json.load(f)
-                if isinstance(data, list):
-                    return data
-                elif isinstance(data, dict):
-                    return [data]
+                return data if isinstance(data, list) else [data]
         except Exception as e:
             print(f"Error loading active signals: {e}")
     return []
@@ -65,28 +63,25 @@ def send_telegram_msg(message):
 def scan_new_signals():
     active_signals = load_active_signals()
     
-    # Signals 2ක් දැනටමත් Open නම් Scan එක Pause වේ
     if len(active_signals) >= MAX_ACTIVE_SIGNALS:
-        print(f"⏸️ Reached maximum active signals limit ({MAX_ACTIVE_SIGNALS}). Skipping scan.")
+        print(f"⏸️ Active signal slots full ({len(active_signals)}/{MAX_ACTIVE_SIGNALS}). Skipping AI scan.")
         return
 
-    print(f"🔍 Scanning markets... (Current Active Trades: {len(active_signals)}/{MAX_ACTIVE_SIGNALS})")
+    print(f"🧠 Gathering market data for AI Analysis... (Active Slots: {len(active_signals)}/{MAX_ACTIVE_SIGNALS})")
     
-    # දැනට Open වී ඇති Coins වල නම් (Duplicate නොවීමට)
     active_symbols = [s['symbol'] for s in active_signals]
-
     tickers = exchange.fetch_tickers()
     usdt_pairs = {k: v.get('quoteVolume', 0) for k, v in tickers.items() if k.endswith('/USDT') and '3L' not in k and '3S' not in k}
     sorted_symbols = sorted(usdt_pairs, key=usdt_pairs.get, reverse=True)[:TOP_COINS_LIMIT]
 
-    valid_signals = []
+    market_candidates = []
 
     for symbol in sorted_symbols:
         if symbol in active_symbols:
-            continue  # දැනටමත් Open Coin එකක් නම් Skip කරන්න
+            continue
 
         try:
-            bars = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=50)
+            bars = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=30)
             df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
             df['EMA_FAST'] = calculate_ema(df, 9)
@@ -96,58 +91,95 @@ def scan_new_signals():
 
             curr = df.iloc[-1]
             prev = df.iloc[-2]
-            close_price = curr['close']
-            atr_val = curr['ATR']
 
-            long_cross = (prev['EMA_FAST'] <= prev['EMA_SLOW']) and (curr['EMA_FAST'] > curr['EMA_SLOW']) and (curr['RSI'] > 50)
-            short_cross = (prev['EMA_FAST'] >= prev['EMA_SLOW']) and (curr['EMA_FAST'] < curr['EMA_SLOW']) and (curr['RSI'] < 50)
-
-            if long_cross:
-                valid_signals.append({
-                    'symbol': symbol, 'side': "LONG 🟢", 'entry': close_price,
-                    'tp1': close_price + (atr_val * 2.0), 'tp2': close_price + (atr_val * 4.0),
-                    'tp3': close_price + (atr_val * 6.0), 'tp4': close_price + (atr_val * 8.0),
-                    'sl': close_price - (atr_val * 2.0), 'last_status': "INITIAL"
-                })
-            elif short_cross:
-                valid_signals.append({
-                    'symbol': symbol, 'side': "SHORT 🔴", 'entry': close_price,
-                    'tp1': close_price - (atr_val * 2.0), 'tp2': close_price - (atr_val * 4.0),
-                    'tp3': close_price - (atr_val * 6.0), 'tp4': close_price - (atr_val * 8.0),
-                    'sl': close_price + (atr_val * 2.0), 'last_status': "INITIAL"
-                })
+            market_candidates.append({
+                "symbol": symbol,
+                "price": curr['close'],
+                "volume_24h": usdt_pairs[symbol],
+                "rsi_15m": round(curr['RSI'], 2),
+                "ema9": round(curr['EMA_FAST'], 4),
+                "ema21": round(curr['EMA_SLOW'], 4),
+                "ema_cross": "BULLISH_CROSS" if (prev['EMA_FAST'] <= prev['EMA_SLOW'] and curr['EMA_FAST'] > curr['EMA_SLOW']) else ("BEARISH_CROSS" if (prev['EMA_FAST'] >= prev['EMA_SLOW'] and curr['EMA_FAST'] < curr['EMA_SLOW']) else "NONE"),
+                "atr": round(curr['ATR'], 6)
+            })
         except Exception:
             continue
 
-    if valid_signals:
-        best_signal = valid_signals[0]
-        active_signals.append(best_signal)
+    if not market_candidates:
+        print("⚠️ No valid candidates fetched.")
+        return
+
+    # 🤖 AI එකට Market Data යවා Single Best Trade එක තෝරාගැනීම
+    ai_raw_res = ai_evaluate_market_candidates(market_candidates)
+    
+    if not ai_raw_res or "NO_TRADE" in ai_raw_res:
+        print("🤖 AI Evaluated Markets: No high-probability setup found right now.")
+        return
+
+    try:
+        # Clean JSON String from AI Response
+        clean_json = ai_raw_res.replace("```json", "").replace("```", "").strip()
+        ai_decision = json.loads(clean_json)
+
+        selected_symbol = ai_decision['symbol']
+        side = ai_decision['side']
+        reason = ai_decision.get('reason', 'AI High Conviction Setup')
+
+        # Selected Coin එකේ Full Technical Details ලබා ගැනීම
+        selected_data = next((c for c in market_candidates if c['symbol'] == selected_symbol), None)
+        if not selected_data:
+            return
+
+        entry = selected_data['price']
+        atr_val = selected_data['atr']
+
+        tp1 = entry + (atr_val * 2.0) if "LONG" in side else entry - (atr_val * 2.0)
+        tp2 = entry + (atr_val * 4.0) if "LONG" in side else entry - (atr_val * 4.0)
+        tp3 = entry + (atr_val * 6.0) if "LONG" in side else entry - (atr_val * 6.0)
+        tp4 = entry + (atr_val * 8.0) if "LONG" in side else entry - (atr_val * 8.0)
+        sl = entry - (atr_val * 2.0) if "LONG" in side else entry + (atr_val * 2.0)
+
+        new_signal = {
+            'symbol': selected_symbol,
+            'side': side,
+            'entry': entry,
+            'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'tp4': tp4,
+            'sl': sl,
+            'last_status': "INITIAL"
+        }
+
+        active_signals.append(new_signal)
         save_active_signals(active_signals)
-        
-        clean_symbol = best_signal['symbol'].replace('/', '')
-        p = 4 if best_signal['entry'] >= 1 else 6
-        
+
+        clean_symbol = selected_symbol.replace('/', '')
+        p = 4 if entry >= 1 else 6
+
         msg = f"""
-🔥 **VIP CRYPTO SIGNAL** 🔥
-*(Active Trade Slot: {len(active_signals)}/{MAX_ACTIVE_SIGNALS})*
+🧠 **AI SMART VIP SIGNAL** 🔥
+*(Selected by Gemini AI Quant Engine)*
 
 📌 **Pair:** #{clean_symbol}
-📊 **Action:** {best_signal['side']}
-🎯 **Entry Price:** {best_signal['entry']:.{p}f}
+📊 **Action:** {side}
+🎯 **Entry Price:** `{entry:.{p}f}`
+
+💡 **AI Setup Reason:** {reason}
 
 💰 **Take-Profit Targets:**
-1️⃣ TP1: {best_signal['tp1']:.{p}f}
-2️⃣ TP2: {best_signal['tp2']:.{p}f}
-3️⃣ TP3: {best_signal['tp3']:.{p}f}
-4️⃣ TP4: {best_signal['tp4']:.{p}f}
+1️⃣ TP1: `{tp1:.{p}f}`
+2️⃣ TP2: `{tp2:.{p}f}`
+3️⃣ TP3: `{tp3:.{p}f}`
+4️⃣ TP4: `{tp4:.{p}f}`
 
-🛡️ **Stop Loss:** {best_signal['sl']:.{p}f}
+🛡️ **Stop Loss:** `{sl:.{p}f}`
 ⚡ **Leverage:** 10x - 20x
 
-🤖 *AI Trade Copilot initialized to monitor this trade!*
+🤖 *AI Copilot Active for Live Monitoring!*
 """
         send_telegram_msg(msg)
-        print(f"✅ New Signal Sent for {clean_symbol}!")
+        print(f"✅ AI Selected and Sent Signal for {clean_symbol}!")
+
+    except Exception as e:
+        print(f"❌ Failed to parse AI decision JSON: {e}")
 
 if __name__ == '__main__':
     scan_new_signals()
