@@ -108,22 +108,31 @@ def get_ai_trade_decision(signal, current_price, rsi, ema_fast, ema_slow):
     🛡️ **Action Plan:** [Clear instructions for members]
     """
 
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
-        headers = {'Content-Type': 'application/json'}
-        payload = {"contents": [{"parts": [{"text": prompt}]}]}
-        
-        response = requests.post(url, json=payload, headers=headers)
-        if response.status_code == 200:
-            res_data = response.json()
-            ai_text = res_data['candidates'][0]['content']['parts'][0]['text']
-            return ai_text
-        else:
-            print(f"❌ AI Error: {response.text}")
-            return None
-    except Exception as e:
-        print(f"❌ AI Exception: {e}")
-        return None
+    # 🔄 Dynamic Model Fallback List (404 Errors මගහැරීමට)
+    models_to_try = [
+        "gemini-2.5-flash",
+        "gemini-1.5-flash",
+        "gemini-2.0-flash"
+    ]
+
+    for model in models_to_try:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+            headers = {'Content-Type': 'application/json'}
+            payload = {"contents": [{"parts": [{"text": prompt}]}]}
+            
+            response = requests.post(url, json=payload, headers=headers)
+            if response.status_code == 200:
+                res_data = response.json()
+                ai_text = res_data['candidates'][0]['content']['parts'][0]['text']
+                return ai_text
+            else:
+                print(f"⚠️ Model {model} failed ({response.status_code}). Trying next model...")
+        except Exception as e:
+            print(f"❌ Exception with {model}: {e}")
+
+    print("❌ All Gemini AI models failed.")
+    return None
 
 # ==================== MANAGING OPEN ACTIVE TRADE ====================
 def manage_active_trade(signal):
@@ -214,7 +223,7 @@ def scan_new_signals():
             continue
 
     if valid_signals:
-        best_signal = valid_signals[0] # Pick top quality
+        best_signal = valid_signals[0]
         save_active_signal(best_signal)
         
         clean_symbol = best_signal['symbol'].replace('/', '')
@@ -244,8 +253,6 @@ def scan_new_signals():
 if __name__ == '__main__':
     active_signal = load_active_signal()
     if active_signal:
-        # Open Trade එකක් තියෙනවා නම් AI එකෙන් ඒක Monitor කරනවා
         manage_active_trade(active_signal)
     else:
-        # Open Trade එකක් නැත්නම් අලුත් Best Signal එකක් හොයනවා
         scan_new_signals()
