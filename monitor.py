@@ -10,7 +10,7 @@ CHAT_ID = os.environ.get("CHAT_ID", "")
 TIMEFRAME = '15m'
 ACTIVE_SIGNAL_FILE = 'active_signal.json'
 
-PNL_CHANGE_THRESHOLD = 1.5  # PnL වෙනස 1.5% ට වැඩි නම් විතරක් AI එක කැඳවයි
+PNL_CHANGE_THRESHOLD = 1.5  # PnL වෙනස 1.5% ට වැඩි නම් විතරක් AI API Call එක යවයි
 
 exchange = ccxt.mexc({'enableRateLimit': True})
 
@@ -131,14 +131,13 @@ def monitor_trades():
                     print(f"🗑️ TP4 Hit for {symbol}. Trade removed.")
                     continue
 
-            # 🤖 3. SMART AI CHECK (Only call Gemini if PnL changed >= 1.5% or initial check)
+            # 🤖 3. SMART AI CHECK (PnL වෙනස 1.5% ට වැඩි නම් විතරක් AI එක කැඳවයි)
             last_pnl = signal.get('last_pnl', None)
             pnl_diff = abs(current_pnl - last_pnl) if last_pnl is not None else 999.0
 
             if last_pnl is not None and pnl_diff < PNL_CHANGE_THRESHOLD:
                 print(f"⏳ No significant change for {symbol} (PnL Diff: {pnl_diff:.2f}% < {PNL_CHANGE_THRESHOLD}%). Skipping AI API Call.")
             else:
-                # PnL වෙනස් වී ඇත්නම් පමණක් AI එක කැඳවයි!
                 ai_msg = get_ai_trade_decision(signal, current_price, curr['RSI'], curr['EMA_FAST'], curr['EMA_SLOW'])
                 
                 if ai_msg:
