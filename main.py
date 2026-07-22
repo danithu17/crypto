@@ -10,7 +10,7 @@ CHAT_ID = os.environ.get("CHAT_ID", "@YOUR_TELEGRAM_CHANNEL_USERNAME")
 SYMBOLS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT'] 
 TIMEFRAME = '15m' 
 
-exchange = ccxt.binance({'enableRateLimit': True})
+exchange = ccxt.bybit({'enableRateLimit': True})
 
 # ==================== TECHNICAL INDICATORS (PURE PANDAS) ====================
 def calculate_ema(df, length):
