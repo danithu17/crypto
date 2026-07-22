@@ -10,8 +10,7 @@ CHAT_ID = os.environ.get("CHAT_ID", "")
 TIMEFRAME = '15m'
 ACTIVE_SIGNAL_FILE = 'active_signal.json'
 
-# 📈 PnL Threshold (%): PnL එක 1.5% කින් වෙනස් වුණොත් විතරක් AI Message එක යවයි
-PNL_CHANGE_THRESHOLD = 1.5 
+PNL_CHANGE_THRESHOLD = 1.5  # PnL වෙනස 1.5% ට වැඩි නම් විතරක් AI එක කැඳවයි
 
 exchange = ccxt.mexc({'enableRateLimit': True})
 
@@ -20,10 +19,7 @@ def load_active_signals():
         try:
             with open(ACTIVE_SIGNAL_FILE, 'r') as f:
                 data = json.load(f)
-                if isinstance(data, list):
-                    return data
-                elif isinstance(data, dict):
-                    return [data]
+                return data if isinstance(data, list) else [data]
         except Exception as e:
             print(f"Error loading active signals: {e}")
     return []
@@ -89,7 +85,6 @@ def monitor_trades():
             clean_symbol = symbol.replace('/', '')
             p = 4 if current_price >= 1 else 6
 
-            # Live PnL % calculation
             current_pnl = ((current_price - entry) / entry) * 100 if "LONG" in side else ((entry - current_price) / entry) * 100
 
             # 🛑 1. STOP LOSS CHECK
@@ -136,36 +131,25 @@ def monitor_trades():
                     print(f"🗑️ TP4 Hit for {symbol}. Trade removed.")
                     continue
 
-            # 🤖 3. AI ANALYSIS (SMART SIGNIFICANT CHANGE FILTER)
+            # 🤖 3. SMART AI CHECK (Only call Gemini if PnL changed >= 1.5% or initial check)
             last_pnl = signal.get('last_pnl', None)
             pnl_diff = abs(current_pnl - last_pnl) if last_pnl is not None else 999.0
 
-            ai_msg = get_ai_trade_decision(signal, current_price, curr['RSI'], curr['EMA_FAST'], curr['EMA_SLOW'])
-            
-            if ai_msg:
-                is_hold = "HOLD & WAIT" in ai_msg.upper()
-
-                # Filter Logic: PnL එක 1.5% කින් වෙනස් වුණොත් හෝ Action එක HOLD එකෙන් වෙනස් වුණොත් විතරක් යවන්න
-                should_send_update = False
-
-                if last_pnl is None:
-                    should_send_update = True  # පළමු පාර Run වෙද්දී
-                elif not is_hold:
-                    should_send_update = True  # MOVE SL, TAKE PROFIT වගේ විශේෂ Action එකක් ආවොත්
-                elif pnl_diff >= PNL_CHANGE_THRESHOLD:
-                    should_send_update = True  # PnL වෙනස 1.5% ට වඩා වැඩි වුණොත්
-
-                if should_send_update:
+            if last_pnl is not None and pnl_diff < PNL_CHANGE_THRESHOLD:
+                print(f"⏳ No significant change for {symbol} (PnL Diff: {pnl_diff:.2f}% < {PNL_CHANGE_THRESHOLD}%). Skipping AI API Call.")
+            else:
+                # PnL වෙනස් වී ඇත්නම් පමණක් AI එක කැඳවයි!
+                ai_msg = get_ai_trade_decision(signal, current_price, curr['RSI'], curr['EMA_FAST'], curr['EMA_SLOW'])
+                
+                if ai_msg:
                     send_telegram_msg(ai_msg)
                     signal['last_pnl'] = current_pnl
-                    signal['last_status'] = "HOLD & WAIT" if is_hold else "ACTION_TAKEN"
+                    signal['last_status'] = "HOLD & WAIT" if "HOLD & WAIT" in ai_msg.upper() else "ACTION_TAKEN"
                     print(f"✅ Significant update sent for {symbol} (PnL Diff: {pnl_diff:.2f}%)")
-                else:
-                    print(f"⏳ No significant change for {symbol} (PnL Diff: {pnl_diff:.2f}% < {PNL_CHANGE_THRESHOLD}%). Skipping message.")
 
-                if "CLOSE POSITION NOW" in ai_msg.upper():
-                    print(f"🔴 AI advised to close {symbol}. Trade removed.")
-                    continue
+                    if "CLOSE POSITION NOW" in ai_msg.upper():
+                        print(f"🔴 AI advised to close {symbol}. Trade removed.")
+                        continue
 
             remaining_signals.append(signal)
 
