@@ -7,7 +7,7 @@ import pandas as pd
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN_HERE")
 CHAT_ID = os.environ.get("CHAT_ID", "@YOUR_TELEGRAM_CHANNEL_USERNAME")
 
-# Scan කිරීමට අවශ්‍ය Top Coins ගණන
+# Volume එක වැඩිම Top Coins Scan කිරීම
 TOP_COINS_LIMIT = 30 
 TIMEFRAME = '15m' 
 
@@ -21,13 +21,11 @@ def get_top_volume_symbols(limit=30):
         usdt_pairs = {}
         
         for symbol, ticker in tickers.items():
-            # leveraged tokens (3L, 3S වගේ ඒවා) අයින් කර ස්පොට් USDT පරීක්ෂා කිරීම
             if symbol.endswith('/USDT') and '3L' not in symbol and '3S' not in symbol:
                 quote_vol = ticker.get('quoteVolume', 0)
                 if quote_vol is not None and quote_vol > 0:
                     usdt_pairs[symbol] = quote_vol
         
-        # Volume එක අනුව Sort කර Top Pairs තෝරා ගැනීම
         sorted_symbols = sorted(usdt_pairs, key=usdt_pairs.get, reverse=True)
         top_symbols = sorted_symbols[:limit]
         print(f"📊 Successfully fetched Top {len(top_symbols)} volume coins for scanning!")
@@ -35,7 +33,6 @@ def get_top_volume_symbols(limit=30):
         
     except Exception as e:
         print(f"⚠️ Error fetching top volume coins: {e}. Using fallback list.")
-        # මොකක් හරි අවුලක් ආවොත් Run වන Fallback List එක
         return [
             'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT', 
             'DOGE/USDT', 'ADA/USDT', 'AVAX/USDT', 'NEAR/USDT', 'SUI/USDT',
@@ -66,23 +63,29 @@ def calculate_atr(df, length=14):
     return tr.ewm(alpha=1/length, adjust=False).mean()
 
 # ==================== TELEGRAM NOTIFIER ====================
-def send_telegram_signal(symbol, side, entry, tp1, tp2, sl):
+def send_telegram_signal(symbol, side, entry, tp1, tp2, tp3, tp4, sl):
     clean_symbol = symbol.replace('/', '')
+    
+    # Decimal Places නිවැරදිව Format කිරීම
+    price_precision = 4 if entry >= 1 else 6
+    
     message = f"""
-🚀 **AUTOMATED CRYPTO SIGNAL** 🚀
+🔥 **VIP CRYPTO SIGNAL** 🔥
 
 📌 **Pair:** #{clean_symbol}
 📊 **Action:** {side}
-🎯 **Entry Price:** {entry:.4f}
+🎯 **Entry Price:** {entry:.{price_precision}f}
 
 💰 **Take-Profit Targets:**
-1️⃣ TP1: {tp1:.4f}
-2️⃣ TP2: {tp2:.4f}
+1️⃣ TP1: {tp1:.{price_precision}f}
+2️⃣ TP2: {tp2:.{price_precision}f}
+3️⃣ TP3: {tp3:.{price_precision}f}
+4️⃣ TP4: {tp4:.{price_precision}f}
 
-🛡️ **Stop Loss:** {sl:.4f}
-⚡ **Leverage:** 5x - 10x
+🛡️ **Stop Loss:** {sl:.{price_precision}f}
+⚡ **Leverage:** 10x - 20x (High Profit Target)
 
-⚠️ *Risk Warning: Always use Proper Position Sizing!*
+⚠️ *Advice: Move SL to Entry after TP1 hits!*
 """
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
@@ -90,7 +93,7 @@ def send_telegram_signal(symbol, side, entry, tp1, tp2, sl):
     try:
         response = requests.post(url, json=payload)
         if response.status_code == 200:
-            print(f"✅ [{symbol}] Signal successfully sent to Telegram!")
+            print(f"✅ [{symbol}] High-Profit Signal successfully sent to Telegram!")
         else:
             print(f"❌ Failed to send Telegram message: {response.text}")
     except Exception as e:
@@ -120,23 +123,27 @@ def check_signals():
             close_price = curr['close']
             atr_val = curr['ATR']
 
-            # Trading Conditions
+            # High Volatility Trading Conditions
             long_condition = (prev['EMA_FAST'] <= prev['EMA_SLOW']) and (curr['EMA_FAST'] > curr['EMA_SLOW']) and (curr['RSI'] > 50)
             short_condition = (prev['EMA_FAST'] >= prev['EMA_SLOW']) and (curr['EMA_FAST'] < curr['EMA_SLOW']) and (curr['RSI'] < 50)
 
             if long_condition:
                 entry = close_price
-                sl = entry - (atr_val * 1.5)
-                tp1 = entry + (atr_val * 1.5)
-                tp2 = entry + (atr_val * 3.0)
-                send_telegram_signal(symbol, "LONG 🟢", entry, tp1, tp2, sl)
+                sl = entry - (atr_val * 2.0)
+                tp1 = entry + (atr_val * 2.0)
+                tp2 = entry + (atr_val * 4.0)
+                tp3 = entry + (atr_val * 6.0)
+                tp4 = entry + (atr_val * 8.0)
+                send_telegram_signal(symbol, "LONG 🟢", entry, tp1, tp2, tp3, tp4, sl)
 
             elif short_condition:
                 entry = close_price
-                sl = entry + (atr_val * 1.5)
-                tp1 = entry - (atr_val * 1.5)
-                tp2 = entry - (atr_val * 3.0)
-                send_telegram_signal(symbol, "SHORT 🔴", entry, tp1, tp2, sl)
+                sl = entry + (atr_val * 2.0)
+                tp1 = entry - (atr_val * 2.0)
+                tp2 = entry - (atr_val * 4.0)
+                tp3 = entry - (atr_val * 6.0)
+                tp4 = entry - (atr_val * 8.0)
+                send_telegram_signal(symbol, "SHORT 🔴", entry, tp1, tp2, tp3, tp4, sl)
 
         except Exception as e:
             print(f"❌ Error checking {symbol}: {e}")
