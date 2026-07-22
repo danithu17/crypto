@@ -1,14 +1,15 @@
 import os
 import json
-import random
 import requests
 import ccxt
 import pandas as pd
 
+# 🧠 Import AI Analysis Module
+from ai_analyzer import get_ai_trade_decision
+
 # ==================== CONFIGURATION ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 TOP_COINS_LIMIT = 30 
 TIMEFRAME = '15m' 
@@ -36,6 +37,7 @@ def save_active_signal(signal_data):
 def clear_active_signal():
     if os.path.exists(ACTIVE_SIGNAL_FILE):
         os.remove(ACTIVE_SIGNAL_FILE)
+        print("🗑️ Active trade cleared from state!")
 
 # ==================== TECHNICAL INDICATORS ====================
 def calculate_ema(df, length):
@@ -68,73 +70,7 @@ def send_telegram_msg(message):
         print(f"❌ Telegram Error: {e}")
         return False
 
-# ==================== AI DECISION ENGINE (GEMINI AI) ====================
-def get_ai_trade_decision(signal, current_price, rsi, ema_fast, ema_slow):
-    """ Google Gemini AI Model එක පාවිච්චි කරමින් Live Position Decision එකක් ගැනීම """
-    if not GEMINI_API_KEY:
-        print("⚠️ Gemini API Key missing! Fallback to standard tracking.")
-        return None
-
-    side = signal['side']
-    entry = signal['entry']
-    pnl_pct = ((current_price - entry) / entry) * 100 if "LONG" in side else ((entry - current_price) / entry) * 100
-    
-    prompt = f"""
-    You are a professional Crypto VIP Trading Assistant AI. Analyze this active trade:
-
-    - Pair: {signal['symbol']}
-    - Position Side: {side}
-    - Entry Price: {entry}
-    - Current Live Price: {current_price}
-    - PnL Percentage: {pnl_pct:.2f}%
-    - TP1: {signal['tp1']} | TP2: {signal['tp2']} | TP3: {signal['tp3']} | TP4: {signal['tp4']}
-    - Stop Loss: {signal['sl']}
-    - Current 15m RSI: {rsi:.2f}
-    - EMA 9: {ema_fast:.4f} | EMA 21: {ema_slow:.4f}
-
-    Instructions:
-    Generate a short, attractive, professional Telegram VIP update message in English with emojis.
-    Determine the primary AI Recommendation Action: (Options: 🟢 HOLD & WAIT, 🎯 MOVE SL TO ENTRY, 💰 TAKE PARTIAL PROFIT, 🔴 CLOSE POSITION NOW).
-    Provide 1 sentence reason explaining WHY based on RSI/Price movement.
-
-    Output format:
-    🤖 **AI TRADE MANAGEMENT UPDATE** 🤖
-
-    📌 **Pair:** #{signal['symbol'].replace('/', '')}
-    📊 **Status:** [Action Recommendation]
-    📈 **Current PnL:** {pnl_pct:+.2f}%
-
-    💡 **AI Analysis:** [1 sentence explanation]
-    🛡️ **Action Plan:** [Clear instructions for members]
-    """
-
-    # 🔄 Dynamic Model Fallback List (404 Errors මගහැරීමට)
-    models_to_try = [
-        "gemini-2.5-flash",
-        "gemini-1.5-flash",
-        "gemini-2.0-flash"
-    ]
-
-    for model in models_to_try:
-        try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
-            headers = {'Content-Type': 'application/json'}
-            payload = {"contents": [{"parts": [{"text": prompt}]}]}
-            
-            response = requests.post(url, json=payload, headers=headers)
-            if response.status_code == 200:
-                res_data = response.json()
-                ai_text = res_data['candidates'][0]['content']['parts'][0]['text']
-                return ai_text
-            else:
-                print(f"⚠️ Model {model} failed ({response.status_code}). Trying next model...")
-        except Exception as e:
-            print(f"❌ Exception with {model}: {e}")
-
-    print("❌ All Gemini AI models failed.")
-    return None
-
-# ==================== MANAGING OPEN ACTIVE TRADE ====================
+# ==================== MANAGING ACTIVE TRADE ====================
 def manage_active_trade(signal):
     symbol = signal['symbol']
     print(f"🔄 Managing Active AI Trade for {symbol}...")
@@ -159,24 +95,30 @@ def manage_active_trade(signal):
             msg = f"🛑 **TRADE CLOSED (STOP LOSS HIT)** 🛑\n\n📌 **Pair:** #{symbol.replace('/', '')}\n❌ Price hit Stop Loss at {current_price:.4f}. Risk Managed!"
             send_telegram_msg(msg)
             clear_active_signal()
-            return
+            return True # Trade was closed
 
         # 2. Final TP Hit Check
         if ("LONG" in side and current_price >= tp4) or ("SHORT" in side and current_price <= tp4):
             msg = f"🎯 **ALL TARGETS ACHIEVED! (TP4 HIT)** 🚀\n\n📌 **Pair:** #{symbol.replace('/', '')}\n💰 Maximum Profit Unlocked at {current_price:.4f}!"
             send_telegram_msg(msg)
             clear_active_signal()
-            return
+            return True # Trade was closed
 
         # 3. AI Powered Decision Update
         ai_msg = get_ai_trade_decision(signal, current_price, curr['RSI'], curr['EMA_FAST'], curr['EMA_SLOW'])
         if ai_msg:
             send_telegram_msg(ai_msg)
-        else:
-            print("Could not get AI decision.")
+            # AI එකෙන් Close කරන්න කියලා තිබ්බොත් Trade එක අයින් කිරීම
+            if "CLOSE POSITION NOW" in ai_msg.upper():
+                print("🔴 AI advised to close position. Clearing trade state...")
+                clear_active_signal()
+                return True
+        
+        return False # Trade is still active
 
     except Exception as e:
         print(f"❌ Error managing trade {symbol}: {e}")
+        return False
 
 # ==================== SCANNING NEW SIGNALS ====================
 def scan_new_signals():
@@ -249,10 +191,16 @@ def scan_new_signals():
 """
         send_telegram_msg(msg)
 
-# ==================== MAIN EXECUTION ====================
+# ==================== MAIN EXECUTION FLOW ====================
 if __name__ == '__main__':
     active_signal = load_active_signal()
+    trade_closed = False
+    
     if active_signal:
-        manage_active_trade(active_signal)
-    else:
+        # Active trade එක AI එකෙන් Manage කිරීම
+        trade_closed = manage_active_trade(active_signal)
+    
+    # Active trade එකක් නොතිබුණොත් හෝ Active trade එක ක්ලෝස් වුණොත්,
+    # එසැණින්ම අලුත් Signal එකක් සඳහා Scan කිරීම!
+    if not active_signal or trade_closed:
         scan_new_signals()
