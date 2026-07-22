@@ -4,7 +4,7 @@ import requests
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 def get_ai_trade_decision(signal, current_price, rsi, ema_fast, ema_slow):
-    """ Google Gemini AI Model එක හරහා Live Trade Decision එකක් ලබා ගැනීම """
+    """ Google Gemini AI Model එක හරහා Live Trade Analysis එකක් ලබා ගැනීම """
     if not GEMINI_API_KEY:
         print("⚠️ Gemini API Key missing!")
         return None
@@ -20,7 +20,7 @@ def get_ai_trade_decision(signal, current_price, rsi, ema_fast, ema_slow):
     - Position Side: {side}
     - Entry Price: {entry}
     - Current Live Price: {current_price}
-    - PnL Percentage: {pnl_pct:.2f}%
+    - Current PnL Percentage: {pnl_pct:.2f}%
     - TP1: {signal['tp1']} | TP2: {signal['tp2']} | TP3: {signal['tp3']} | TP4: {signal['tp4']}
     - Stop Loss: {signal['sl']}
     - Current 15m RSI: {rsi:.2f}
@@ -42,7 +42,6 @@ def get_ai_trade_decision(signal, current_price, rsi, ema_fast, ema_slow):
     🛡️ **Action Plan:** [Clear instructions for members]
     """
 
-    # 🔄 Auto Fallback for Gemini Models
     models_to_try = [
         "gemini-2.5-flash",
         "gemini-1.5-flash",
@@ -58,12 +57,9 @@ def get_ai_trade_decision(signal, current_price, rsi, ema_fast, ema_slow):
             response = requests.post(url, json=payload, headers=headers, timeout=10)
             if response.status_code == 200:
                 res_data = response.json()
-                ai_text = res_data['candidates'][0]['content']['parts'][0]['text']
-                return ai_text
-            else:
-                print(f"⚠️ Model {model} failed ({response.status_code}). Trying next...")
+                return res_data['candidates'][0]['content']['parts'][0]['text']
         except Exception as e:
-            print(f"❌ Exception with {model}: {e}")
+            continue
 
     print("❌ All Gemini AI models failed.")
     return None
