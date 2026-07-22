@@ -2,9 +2,11 @@ name: Run Crypto Signal Bot
 
 on:
   schedule:
-    # සෑම විනාඩි 15කට සැරයක්ම Auto Run වෙනවා
     - cron: '*/15 * * * *'
-  workflow_dispatch: # Manual වුණත් Run කරලා බලන්න පුළුවන් button එකක් එනවා
+  workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   run-bot:
@@ -12,10 +14,10 @@ jobs:
 
     steps:
       - name: Check out repo code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
@@ -28,4 +30,13 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python main.py
+
+      - name: Commit Active Trade State
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add active_signal.json || true
+          git commit -m "Auto update active trade state [skip ci]" || true
+          git push || true
