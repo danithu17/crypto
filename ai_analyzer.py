@@ -6,20 +6,23 @@ import time
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 def call_gemini_api(prompt):
-    """ Google Gemini API Call කිරීම (Error Logging + Rate Limit Delay සහිතව) """
+    """ Google Gemini API Call කිරීම (Multi-Endpoint + Multi-Model Fallback) """
     if not GEMINI_API_KEY:
-        print("⚠️ Gemini API Key missing!")
+        print("⚠️ Gemini API Key missing in Secrets!")
         return None
 
-    models_to_try = [
-        "gemini-1.5-flash",
-        "gemini-1.5-pro",
-        "gemini-2.0-flash-exp"
+    # 🔄 API Versions සහ Working Models ලැයිස්තුව
+    api_configs = [
+        ("v1beta", "gemini-2.5-flash"),
+        ("v1beta", "gemini-2.0-flash"),
+        ("v1", "gemini-1.5-flash"),
+        ("v1beta", "gemini-1.5-flash"),
+        ("v1", "gemini-1.5-pro")
     ]
 
-    for model in models_to_try:
+    for api_version, model in api_configs:
         try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}"
+            url = f"https://generativelanguage.googleapis.com/{api_version}/models/{model}:generateContent?key={GEMINI_API_KEY}"
             headers = {'Content-Type': 'application/json'}
             payload = {"contents": [{"parts": [{"text": prompt}]}]}
             
@@ -27,14 +30,14 @@ def call_gemini_api(prompt):
             
             if response.status_code == 200:
                 res_data = response.json()
-                time.sleep(2)  # Rate Limit වැළැක්වීමට තත්පර 2ක Delay එකක්
+                time.sleep(1) # Rate limit guard
                 return res_data['candidates'][0]['content']['parts'][0]['text']
             else:
-                print(f"⚠️ Model {model} Error ({response.status_code}): {response.text[:100]}")
+                print(f"⚠️ [{api_version}/{model}] Failed ({response.status_code}). Retrying next config...")
         except Exception as e:
             print(f"❌ Exception with {model}: {e}")
 
-    print("❌ All Gemini AI models failed.")
+    print("❌ All Gemini API configs failed. Please verify GEMINI_API_KEY secret in GitHub.")
     return None
 
 def ai_evaluate_market_candidates(candidates_data):
