@@ -10,6 +10,9 @@ CHAT_ID = os.environ.get("CHAT_ID", "")
 TIMEFRAME = '15m'
 ACTIVE_SIGNAL_FILE = 'active_signal.json'
 
+# 📈 PnL Threshold (%): PnL එක 1.5% කින් වෙනස් වුණොත් විතරක් AI Message එක යවයි
+PNL_CHANGE_THRESHOLD = 1.5 
+
 exchange = ccxt.mexc({'enableRateLimit': True})
 
 def load_active_signals():
@@ -78,22 +81,23 @@ def monitor_trades():
 
             curr = df.iloc[-1]
             current_price = curr['close']
+            entry = signal['entry']
             side = signal['side']
             sl = signal['sl']
-            tp1 = signal['tp1']
-            tp2 = signal['tp2']
-            tp3 = signal['tp3']
-            tp4 = signal['tp4']
+            tp1, tp2, tp3, tp4 = signal['tp1'], signal['tp2'], signal['tp3'], signal['tp4']
             
             clean_symbol = symbol.replace('/', '')
             p = 4 if current_price >= 1 else 6
+
+            # Live PnL % calculation
+            current_pnl = ((current_price - entry) / entry) * 100 if "LONG" in side else ((entry - current_price) / entry) * 100
 
             # 🛑 1. STOP LOSS CHECK
             if ("LONG" in side and current_price <= sl) or ("SHORT" in side and current_price >= sl):
                 msg = f"🛑 **TRADE CLOSED (STOP LOSS HIT)** 🛑\n\n📌 **Pair:** #{clean_symbol}\n❌ Price hit Stop Loss at `{current_price:.{p}f}`. Risk Managed!"
                 send_telegram_msg(msg)
                 print(f"🗑️ SL Hit for {symbol}. Trade removed.")
-                continue  # Trade එක Close නිසා ලිස්ට් එකට එකතු නොවේ
+                continue
 
             # 🎯 2. STEP-BY-STEP TP TARGETS CHECK
             if "LONG" in side:
@@ -112,7 +116,7 @@ def monitor_trades():
                 if current_price >= tp4:
                     send_telegram_msg(f"🎯 **ALL TARGETS ACHIEVED (TP4 HIT)!** 🚀🔥\n\n📌 **Pair:** #{clean_symbol}\n💰 Maximum Profit Unlocked at `{current_price:.{p}f}`!")
                     print(f"🗑️ TP4 Hit for {symbol}. Trade removed.")
-                    continue  # Completed!
+                    continue
 
             elif "SHORT" in side:
                 if not signal.get('tp1_hit') and current_price <= tp1:
@@ -130,20 +134,34 @@ def monitor_trades():
                 if current_price <= tp4:
                     send_telegram_msg(f"🎯 **ALL TARGETS ACHIEVED (TP4 HIT)!** 🚀🔥\n\n📌 **Pair:** #{clean_symbol}\n💰 Maximum Profit Unlocked at `{current_price:.{p}f}`!")
                     print(f"🗑️ TP4 Hit for {symbol}. Trade removed.")
-                    continue  # Completed!
+                    continue
 
-            # 🤖 3. AI ANALYSIS & PERIODIC UPDATES
+            # 🤖 3. AI ANALYSIS (SMART SIGNIFICANT CHANGE FILTER)
+            last_pnl = signal.get('last_pnl', None)
+            pnl_diff = abs(current_pnl - last_pnl) if last_pnl is not None else 999.0
+
             ai_msg = get_ai_trade_decision(signal, current_price, curr['RSI'], curr['EMA_FAST'], curr['EMA_SLOW'])
             
             if ai_msg:
-                last_status = signal.get('last_status', '')
                 is_hold = "HOLD & WAIT" in ai_msg.upper()
 
-                if is_hold and last_status == "HOLD & WAIT":
-                    print(f"⏳ Status for {symbol} still 'HOLD & WAIT'. Skipping duplicate message.")
-                else:
+                # Filter Logic: PnL එක 1.5% කින් වෙනස් වුණොත් හෝ Action එක HOLD එකෙන් වෙනස් වුණොත් විතරක් යවන්න
+                should_send_update = False
+
+                if last_pnl is None:
+                    should_send_update = True  # පළමු පාර Run වෙද්දී
+                elif not is_hold:
+                    should_send_update = True  # MOVE SL, TAKE PROFIT වගේ විශේෂ Action එකක් ආවොත්
+                elif pnl_diff >= PNL_CHANGE_THRESHOLD:
+                    should_send_update = True  # PnL වෙනස 1.5% ට වඩා වැඩි වුණොත්
+
+                if should_send_update:
                     send_telegram_msg(ai_msg)
+                    signal['last_pnl'] = current_pnl
                     signal['last_status'] = "HOLD & WAIT" if is_hold else "ACTION_TAKEN"
+                    print(f"✅ Significant update sent for {symbol} (PnL Diff: {pnl_diff:.2f}%)")
+                else:
+                    print(f"⏳ No significant change for {symbol} (PnL Diff: {pnl_diff:.2f}% < {PNL_CHANGE_THRESHOLD}%). Skipping message.")
 
                 if "CLOSE POSITION NOW" in ai_msg.upper():
                     print(f"🔴 AI advised to close {symbol}. Trade removed.")
