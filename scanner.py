@@ -9,8 +9,29 @@ CHAT_ID = os.environ.get("CHAT_ID", "")
 TOP_COINS_LIMIT = 30 
 TIMEFRAME = '15m' 
 ACTIVE_SIGNAL_FILE = 'active_signal.json'
+MAX_ACTIVE_SIGNALS = 2  # 🎯 එකපාර දිවෙන උපරිම Active Signals ගණන
 
 exchange = ccxt.mexc({'enableRateLimit': True})
+
+def load_active_signals():
+    if os.path.exists(ACTIVE_SIGNAL_FILE):
+        try:
+            with open(ACTIVE_SIGNAL_FILE, 'r') as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+                elif isinstance(data, dict):
+                    return [data]
+        except Exception as e:
+            print(f"Error loading active signals: {e}")
+    return []
+
+def save_active_signals(signals):
+    try:
+        with open(ACTIVE_SIGNAL_FILE, 'w') as f:
+            json.dump(signals, f, indent=4)
+    except Exception as e:
+        print(f"Error saving active signals: {e}")
 
 def calculate_ema(df, length):
     return df['close'].ewm(span=length, adjust=False).mean()
@@ -42,12 +63,18 @@ def send_telegram_msg(message):
         return False
 
 def scan_new_signals():
-    # Active Trade එකක් තියෙනවා නම් New Signal Scan කරන්නේ නැත
-    if os.path.exists(ACTIVE_SIGNAL_FILE):
-        print("⏸️ An Active Trade is already open! Skipping market scan.")
+    active_signals = load_active_signals()
+    
+    # Signals 2ක් දැනටමත් Open නම් Scan එක Pause වේ
+    if len(active_signals) >= MAX_ACTIVE_SIGNALS:
+        print(f"⏸️ Reached maximum active signals limit ({MAX_ACTIVE_SIGNALS}). Skipping scan.")
         return
 
-    print("🔍 Scanning Top 30 Markets for New High-Quality Signal...")
+    print(f"🔍 Scanning markets... (Current Active Trades: {len(active_signals)}/{MAX_ACTIVE_SIGNALS})")
+    
+    # දැනට Open වී ඇති Coins වල නම් (Duplicate නොවීමට)
+    active_symbols = [s['symbol'] for s in active_signals]
+
     tickers = exchange.fetch_tickers()
     usdt_pairs = {k: v.get('quoteVolume', 0) for k, v in tickers.items() if k.endswith('/USDT') and '3L' not in k and '3S' not in k}
     sorted_symbols = sorted(usdt_pairs, key=usdt_pairs.get, reverse=True)[:TOP_COINS_LIMIT]
@@ -55,6 +82,9 @@ def scan_new_signals():
     valid_signals = []
 
     for symbol in sorted_symbols:
+        if symbol in active_symbols:
+            continue  # දැනටමත් Open Coin එකක් නම් Skip කරන්න
+
         try:
             bars = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=50)
             df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -77,32 +107,29 @@ def scan_new_signals():
                     'symbol': symbol, 'side': "LONG 🟢", 'entry': close_price,
                     'tp1': close_price + (atr_val * 2.0), 'tp2': close_price + (atr_val * 4.0),
                     'tp3': close_price + (atr_val * 6.0), 'tp4': close_price + (atr_val * 8.0),
-                    'sl': close_price - (atr_val * 2.0),
-                    'last_status': "INITIAL"
+                    'sl': close_price - (atr_val * 2.0), 'last_status': "INITIAL"
                 })
             elif short_cross:
                 valid_signals.append({
                     'symbol': symbol, 'side': "SHORT 🔴", 'entry': close_price,
                     'tp1': close_price - (atr_val * 2.0), 'tp2': close_price - (atr_val * 4.0),
                     'tp3': close_price - (atr_val * 6.0), 'tp4': close_price - (atr_val * 8.0),
-                    'sl': close_price + (atr_val * 2.0),
-                    'last_status': "INITIAL"
+                    'sl': close_price + (atr_val * 2.0), 'last_status': "INITIAL"
                 })
         except Exception:
             continue
 
     if valid_signals:
         best_signal = valid_signals[0]
-        
-        # Active Trade එක Save කිරීම
-        with open(ACTIVE_SIGNAL_FILE, 'w') as f:
-            json.dump(best_signal, f, indent=4)
+        active_signals.append(best_signal)
+        save_active_signals(active_signals)
         
         clean_symbol = best_signal['symbol'].replace('/', '')
         p = 4 if best_signal['entry'] >= 1 else 6
         
         msg = f"""
 🔥 **VIP CRYPTO SIGNAL** 🔥
+*(Active Trade Slot: {len(active_signals)}/{MAX_ACTIVE_SIGNALS})*
 
 📌 **Pair:** #{clean_symbol}
 📊 **Action:** {best_signal['side']}
