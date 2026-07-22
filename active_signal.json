@@ -8,7 +8,8 @@
         "tp3": 0.206489041646738,
         "tp4": 0.20298538886231735,
         "sl": 0.22050365278442066,
-        "last_status": "HOLD & WAIT"
+        "last_status": "HOLD & WAIT",
+        "last_pnl": 0.13824884792626485
     },
     {
         "symbol": "ETH/USDT",
@@ -19,6 +20,7 @@
         "tp3": 1891.3119155536822,
         "tp4": 1881.452554071576,
         "sl": 1930.749361482106,
-        "last_status": "HOLD & WAIT"
+        "last_status": "HOLD & WAIT",
+        "last_pnl": 0.026029600862100377
     }
 ]
