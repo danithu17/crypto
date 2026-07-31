@@ -8,8 +8,9 @@ from ai_analyzer import ai_evaluate_market_candidates
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
-TOP_COINS_LIMIT = 20 
+TOP_COINS_LIMIT = 25 
 TIMEFRAME = '15m' 
+MIN_REQUIRED_CANDLES = 100  # 🛑 අලුත් Coins Skip කිරීමට අවම Candles 100ක් (පැය 25k History) තිබිය යුතුය!
 ACTIVE_SIGNAL_FILE = 'active_signal.json'
 MAX_ACTIVE_SIGNALS = 2
 
@@ -102,7 +103,14 @@ def scan_new_signals():
             continue
 
         try:
-            bars = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=30)
+            # Candles 120ක් Fetch කරගනී
+            bars = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=120)
+            
+            # 🚨 1. NEW LISTING FILTER: History එකේ Candles 100ට අඩු නම් (අලුත් Coin එකක් නම්) Skip කරයි!
+            if len(bars) < MIN_REQUIRED_CANDLES:
+                print(f"⚠️ Skipping New Listing {symbol} (Only {len(bars)} candles available, min {MIN_REQUIRED_CANDLES} required).")
+                continue
+
             df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
             df['EMA_FAST'] = calculate_ema(df, 9)
@@ -113,11 +121,16 @@ def scan_new_signals():
             curr = df.iloc[-1]
             prev = df.iloc[-2]
 
+            # 24h Price Change % Calculation
+            first_close = df.iloc[0]['close']
+            price_change_pct = ((curr['close'] - first_close) / first_close) * 100
+
             tv_rec = get_tradingview_recommendation(symbol)
 
             raw_candidates.append({
                 "symbol": symbol,
                 "price": curr['close'],
+                "price_change_recent_pct": round(price_change_pct, 2),
                 "volume_24h": usdt_pairs[symbol],
                 "rsi_15m": round(curr['RSI'], 2),
                 "ema9": round(curr['EMA_FAST'], 4),
@@ -129,13 +142,12 @@ def scan_new_signals():
         except Exception:
             continue
 
-    # 🎯 Smart Pre-Filter: TradingView එක NEUTRAL නැති හෝ EMA Crossover එකක් තියෙන Top 8 Coins විතරක් AI එකට යවයි
+    # Smart Pre-Filter
     filtered_candidates = [
         c for c in raw_candidates 
         if c['tradingview_summary'] in ['BUY', 'STRONG_BUY', 'SELL', 'STRONG_SELL'] or c['ema_cross'] != 'NONE'
     ][:8]
 
-    # Pre-filter එකට එකක්වත් සෙට් නැත්නම් Volume වැඩිම Top 5 යවයි
     if not filtered_candidates:
         filtered_candidates = raw_candidates[:5]
 
@@ -143,9 +155,9 @@ def scan_new_signals():
         print("⚠️ No valid market candidates fetched.")
         return
 
-    print(f"📊 Sending {len(filtered_candidates)} pre-filtered candidates to Gemini AI...")
+    print(f"📊 Sending {len(filtered_candidates)} verified candidates to Gemini AI...")
 
-    # 🤖 AI Market Evaluation Call
+    # 🤖 AI Market Evaluation
     ai_raw_res = ai_evaluate_market_candidates(filtered_candidates)
     
     if not ai_raw_res or "NO_TRADE" in ai_raw_res:
@@ -164,7 +176,10 @@ def scan_new_signals():
         if not selected_data:
             return
 
-        entry = selected_data['price']
+        # ⚡ 2. REAL-TIME PRICE RE-FETCH (Latest exact price re-verification)
+        fresh_ticker = exchange.fetch_ticker(selected_symbol)
+        entry = fresh_ticker['last'] if fresh_ticker and 'last' in fresh_ticker else selected_data['price']
+        
         atr_val = selected_data['atr']
         tv_rating = selected_data.get('tradingview_summary', 'N/A')
 
@@ -212,7 +227,7 @@ def scan_new_signals():
 🤖 *AI Copilot Active for Live Monitoring!*
 """
         send_telegram_msg(msg)
-        print(f"✅ AI Selected and Sent Signal for {clean_symbol} (TV Rating: {tv_rating})!")
+        print(f"✅ AI Selected and Sent Signal for {clean_symbol} (Entry: {entry:.{p}f}, TV Rating: {tv_rating})!")
 
     except Exception as e:
         print(f"❌ Failed to parse AI decision JSON: {e}")
