@@ -8,7 +8,7 @@ from ai_analyzer import ai_evaluate_market_candidates
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
-TOP_COINS_LIMIT = 25 
+TOP_COINS_LIMIT = 70 
 TIMEFRAME = '15m' 
 MIN_REQUIRED_CANDLES = 100  # 🛑 New Listing Filter (අවම පැය 25ක History එකක් තිබිය යුතුය)
 ACTIVE_SIGNAL_FILE = 'active_signal.json'
