@@ -6,12 +6,11 @@ import time
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 def call_gemini_api(prompt):
-    """ Google Gemini API Call කිරීම (Rate Limit Guard + 30s Timeout) """
+    """ Google Gemini API Call කිරීම """
     if not GEMINI_API_KEY:
         print("⚠️ GEMINI_API_KEY is missing in GitHub Workflow Secrets!")
         return None
 
-    # Active and Valid Models Only
     api_configs = [
         ("v1beta", "gemini-2.5-flash"),
         ("v1beta", "gemini-2.0-flash")
@@ -23,42 +22,44 @@ def call_gemini_api(prompt):
             headers = {'Content-Type': 'application/json'}
             payload = {"contents": [{"parts": [{"text": prompt}]}]}
             
-            # Timeout 30 seconds
             response = requests.post(url, json=payload, headers=headers, timeout=30)
             
             if response.status_code == 200:
                 res_data = response.json()
-                time.sleep(1) # Small pause
+                time.sleep(1)
                 return res_data['candidates'][0]['content']['parts'][0]['text']
             elif response.status_code == 429:
-                print(f"⚠️ [{model}] 429 Rate limit hit. Waiting 5s before fallback...")
+                print(f"⚠️ [{model}] 429 Rate limit hit. Waiting 5s...")
                 time.sleep(5)
             else:
                 print(f"⚠️ [{model}] Response ({response.status_code}): {response.text[:120]}")
         except Exception as e:
             print(f"❌ Exception [{model}]: {e}")
 
-    print("❌ All Gemini API configs failed. Free API quota might be temporarily exhausted. Please wait 5 mins.")
+    print("❌ All Gemini API configs failed.")
     return None
 
 def ai_evaluate_market_candidates(candidates_data):
-    """ Market Candidate Analysis """
+    """ Market Candidate Analysis with Strict Risk Management Rules """
     prompt = f"""
     You are an Expert Crypto Quant Trader AI.
-    Analyze these highly pre-filtered market candidates (15m timeframe data + TradingView technicals):
+    Analyze these pre-filtered market candidates (15m timeframe data + TradingView technicals):
 
     {json.dumps(candidates_data, indent=2)}
 
-    Task:
-    1. Select ONLY ONE best high-probability trade candidate (LONG or SHORT) with a win probability > 80%.
-    2. Give strong preference if TradingView recommendation is 'STRONG_BUY' (for LONG) or 'STRONG_SELL' (for SHORT).
-    3. If no candidate has a strong setup, explicitly respond with: "NO_TRADE".
-    4. If a solid setup is found, return ONLY a valid JSON object in this exact format (no markdown):
+    CRITICAL SAFETY RULES:
+    1. NEVER suggest a LONG signal on a coin that is dumping heavily or crashing (-10% or more recent trend - "Catching a falling knife").
+    2. NEVER select coins with inconsistent price history or extreme unpredictable price spikes.
+    3. Select ONLY ONE best high-probability trade candidate (LONG or SHORT) with a win probability > 80%.
+    4. Strong preference if TradingView recommendation is 'STRONG_BUY' (for LONG) or 'STRONG_SELL' (for SHORT) and RSI is in safe zones (35-65).
+    5. If no candidate satisfies all strict conditions, respond explicitly with: "NO_TRADE".
 
+    Output Format:
+    If a valid safe setup is found, return ONLY a valid JSON object (no markdown):
     {{
         "symbol": "BTC/USDT",
         "side": "LONG 🟢" or "SHORT 🔴",
-        "reason": "1 short sentence explanation referencing TradingView rating and momentum",
+        "reason": "1 short sentence explanation referencing TV rating and EMA alignment",
         "confidence": 85
     }}
     """
