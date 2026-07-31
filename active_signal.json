@@ -12,5 +12,16 @@
         "last_status": "ACTION_TAKEN",
         "tp1_hit": true,
         "tp2_hit": true
+    },
+    {
+        "symbol": "USDGO/USDT",
+        "side": "SHORT \ud83d\udd34",
+        "entry": 1.0009,
+        "tp1": 1.0008219999999999,
+        "tp2": 1.0007439999999999,
+        "tp3": 1.0006659999999998,
+        "tp4": 1.0005879999999998,
+        "sl": 1.000978,
+        "last_status": "INITIAL"
     }
 ]
