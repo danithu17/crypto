@@ -6,17 +6,15 @@ import time
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 def call_gemini_api(prompt):
-    """ Google Gemini API Call කිරීම (Multi-Model Fallback + Explicit Error Logging) """
+    """ Google Gemini API Call කිරීම (Rate Limit Guard + 30s Timeout) """
     if not GEMINI_API_KEY:
-        print("⚠️ GEMINI_API_KEY is missing in GitHub Workflow Secrets environment!")
+        print("⚠️ GEMINI_API_KEY is missing in GitHub Workflow Secrets!")
         return None
 
-    # Working Endpoints and 2026 Stable Models
+    # Active and Valid Models Only
     api_configs = [
         ("v1beta", "gemini-2.5-flash"),
-        ("v1beta", "gemini-2.0-flash"),
-        ("v1beta", "gemini-1.5-flash"),
-        ("v1", "gemini-1.5-flash")
+        ("v1beta", "gemini-2.0-flash")
     ]
 
     for api_version, model in api_configs:
@@ -25,33 +23,37 @@ def call_gemini_api(prompt):
             headers = {'Content-Type': 'application/json'}
             payload = {"contents": [{"parts": [{"text": prompt}]}]}
             
-            response = requests.post(url, json=payload, headers=headers, timeout=12)
+            # Timeout 30 seconds
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
             
             if response.status_code == 200:
                 res_data = response.json()
-                time.sleep(1) # Rate limit protection
+                time.sleep(1) # Small pause
                 return res_data['candidates'][0]['content']['parts'][0]['text']
+            elif response.status_code == 429:
+                print(f"⚠️ [{model}] 429 Rate limit hit. Waiting 5s before fallback...")
+                time.sleep(5)
             else:
-                print(f"⚠️ [{api_version}/{model}] API Response ({response.status_code}): {response.text[:150]}")
+                print(f"⚠️ [{model}] Response ({response.status_code}): {response.text[:120]}")
         except Exception as e:
-            print(f"❌ Request Exception [{model}]: {e}")
+            print(f"❌ Exception [{model}]: {e}")
 
-    print("❌ All Gemini API configs failed. Please verify GEMINI_API_KEY in Google AI Studio or GitHub Secrets.")
+    print("❌ All Gemini API configs failed. Free API quota might be temporarily exhausted. Please wait 5 mins.")
     return None
 
 def ai_evaluate_market_candidates(candidates_data):
     """ Market Candidate Analysis """
     prompt = f"""
     You are an Expert Crypto Quant Trader AI.
-    Analyze these market candidates gathered from 15m timeframe data, including TradingView technical recommendations:
+    Analyze these highly pre-filtered market candidates (15m timeframe data + TradingView technicals):
 
     {json.dumps(candidates_data, indent=2)}
 
     Task:
     1. Select ONLY ONE best high-probability trade candidate (LONG or SHORT) with a win probability > 80%.
-    2. Give strong preference if TradingView recommendation is 'STRONG_BUY' (for LONG) or 'STRONG_SELL' (for SHORT) and aligns with EMA/RSI trend.
+    2. Give strong preference if TradingView recommendation is 'STRONG_BUY' (for LONG) or 'STRONG_SELL' (for SHORT).
     3. If no candidate has a strong setup, explicitly respond with: "NO_TRADE".
-    4. If a solid setup is found, return ONLY a valid JSON object in this exact format (no markdown formatting):
+    4. If a solid setup is found, return ONLY a valid JSON object in this exact format (no markdown):
 
     {{
         "symbol": "BTC/USDT",
