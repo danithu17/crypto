@@ -8,7 +8,7 @@ from ai_analyzer import ai_evaluate_market_candidates
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
-TOP_COINS_LIMIT = 25 
+TOP_COINS_LIMIT = 20 
 TIMEFRAME = '15m' 
 ACTIVE_SIGNAL_FILE = 'active_signal.json'
 MAX_ACTIVE_SIGNALS = 2
@@ -33,7 +33,7 @@ def save_active_signals(signals):
         print(f"Error saving active signals: {e}")
 
 def get_tradingview_recommendation(symbol):
-    """ TradingView Free Analysis Summary එක ලබා ගැනීම """
+    """ TradingView Free Analysis Summary """
     try:
         clean_sym = symbol.replace('/', '')
         handler = TA_Handler(
@@ -88,7 +88,6 @@ def scan_new_signals():
     active_symbols = [s['symbol'] for s in active_signals]
     tickers = exchange.fetch_tickers()
     
-    # 🎯 Filter out Leveraged tokens (3L, 3S) & Special tokens containing brackets ()
     usdt_pairs = {
         k: v.get('quoteVolume', 0) 
         for k, v in tickers.items() 
@@ -96,7 +95,7 @@ def scan_new_signals():
     }
     sorted_symbols = sorted(usdt_pairs, key=usdt_pairs.get, reverse=True)[:TOP_COINS_LIMIT]
 
-    market_candidates = []
+    raw_candidates = []
 
     for symbol in sorted_symbols:
         if symbol in active_symbols:
@@ -116,7 +115,7 @@ def scan_new_signals():
 
             tv_rec = get_tradingview_recommendation(symbol)
 
-            market_candidates.append({
+            raw_candidates.append({
                 "symbol": symbol,
                 "price": curr['close'],
                 "volume_24h": usdt_pairs[symbol],
@@ -130,12 +129,24 @@ def scan_new_signals():
         except Exception:
             continue
 
-    if not market_candidates:
+    # 🎯 Smart Pre-Filter: TradingView එක NEUTRAL නැති හෝ EMA Crossover එකක් තියෙන Top 8 Coins විතරක් AI එකට යවයි
+    filtered_candidates = [
+        c for c in raw_candidates 
+        if c['tradingview_summary'] in ['BUY', 'STRONG_BUY', 'SELL', 'STRONG_SELL'] or c['ema_cross'] != 'NONE'
+    ][:8]
+
+    # Pre-filter එකට එකක්වත් සෙට් නැත්නම් Volume වැඩිම Top 5 යවයි
+    if not filtered_candidates:
+        filtered_candidates = raw_candidates[:5]
+
+    if not filtered_candidates:
         print("⚠️ No valid market candidates fetched.")
         return
 
+    print(f"📊 Sending {len(filtered_candidates)} pre-filtered candidates to Gemini AI...")
+
     # 🤖 AI Market Evaluation Call
-    ai_raw_res = ai_evaluate_market_candidates(market_candidates)
+    ai_raw_res = ai_evaluate_market_candidates(filtered_candidates)
     
     if not ai_raw_res or "NO_TRADE" in ai_raw_res:
         print("🤖 AI Evaluated Markets: No high-probability setup found right now.")
@@ -149,7 +160,7 @@ def scan_new_signals():
         side = ai_decision['side']
         reason = ai_decision.get('reason', 'AI High Conviction Setup')
 
-        selected_data = next((c for c in market_candidates if c['symbol'] == selected_symbol), None)
+        selected_data = next((c for c in filtered_candidates if c['symbol'] == selected_symbol), None)
         if not selected_data:
             return
 
