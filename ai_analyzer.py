@@ -6,14 +6,15 @@ import time
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 def call_gemini_api(prompt):
-    """ Google Gemini API Call කිරීම """
+    """ Fast Executing Gemini API Call """
     if not GEMINI_API_KEY:
-        print("⚠️ GEMINI_API_KEY is missing in GitHub Workflow Secrets!")
+        print("⚠️ GEMINI_API_KEY missing in Secrets!")
         return None
 
+    # Priority to fast flash models
     api_configs = [
-        ("v1beta", "gemini-2.5-flash"),
-        ("v1beta", "gemini-2.0-flash")
+        ("v1beta", "gemini-2.0-flash"),
+        ("v1beta", "gemini-2.5-flash")
     ]
 
     for api_version, model in api_configs:
@@ -22,17 +23,17 @@ def call_gemini_api(prompt):
             headers = {'Content-Type': 'application/json'}
             payload = {"contents": [{"parts": [{"text": prompt}]}]}
             
-            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            # Fast timeout 15s
+            response = requests.post(url, json=payload, headers=headers, timeout=15)
             
             if response.status_code == 200:
                 res_data = response.json()
-                time.sleep(1)
                 return res_data['candidates'][0]['content']['parts'][0]['text']
             elif response.status_code == 429:
-                print(f"⚠️ [{model}] 429 Rate limit hit. Waiting 5s...")
-                time.sleep(5)
+                print(f"⚠️ [{model}] Rate limit hit (429). Retrying after 3s...")
+                time.sleep(3)
             else:
-                print(f"⚠️ [{model}] Response ({response.status_code}): {response.text[:120]}")
+                print(f"⚠️ [{model}] Error ({response.status_code}): {response.text[:100]}")
         except Exception as e:
             print(f"❌ Exception [{model}]: {e}")
 
@@ -40,26 +41,20 @@ def call_gemini_api(prompt):
     return None
 
 def ai_evaluate_market_candidates(candidates_data):
-    """ Market Candidate Analysis with Strict Risk Management Rules """
+    """ Ultra-Fast Evaluation Prompt """
     prompt = f"""
-    You are an Expert Crypto Quant Trader AI.
-    Analyze these pre-filtered market candidates (15m timeframe data + TradingView technicals):
-
+    You are a Crypto Quant AI. Analyze these candidates:
     {json.dumps(candidates_data, indent=2)}
 
-    CRITICAL SAFETY RULES:
-    1. NEVER suggest a LONG signal on a coin that is dumping heavily or crashing (-10% or more recent trend - "Catching a falling knife").
-    2. NEVER select coins with inconsistent price history or extreme unpredictable price spikes.
-    3. Select ONLY ONE best high-probability trade candidate (LONG or SHORT) with a win probability > 80%.
-    4. Strong preference if TradingView recommendation is 'STRONG_BUY' (for LONG) or 'STRONG_SELL' (for SHORT) and RSI is in safe zones (35-65).
-    5. If no candidate satisfies all strict conditions, respond explicitly with: "NO_TRADE".
-
-    Output Format:
-    If a valid safe setup is found, return ONLY a valid JSON object (no markdown):
+    Rules:
+    1. NEVER LONG a crashing coin (-10%+ drop).
+    2. Pick ONE best setup (>80% win prob) aligned with tv_rating/rsi.
+    3. If no setup, reply: "NO_TRADE".
+    4. Return ONLY raw JSON (no markdown):
     {{
         "symbol": "BTC/USDT",
         "side": "LONG 🟢" or "SHORT 🔴",
-        "reason": "1 short sentence explanation referencing TV rating and EMA alignment",
+        "reason": "1 short sentence explanation",
         "confidence": 85
     }}
     """
@@ -72,31 +67,11 @@ def get_ai_trade_decision(signal, current_price, rsi, ema_fast, ema_slow):
     pnl_pct = ((current_price - entry) / entry) * 100 if "LONG" in side else ((entry - current_price) / entry) * 100
     
     prompt = f"""
-    You are a professional Crypto VIP Trading Assistant AI. Analyze this active trade:
+    You are a Crypto VIP Assistant AI. Analyze active trade:
+    - Pair: {signal['symbol']} | Side: {side} | Entry: {entry} | Current: {current_price} | PnL: {pnl_pct:.2f}%
+    - TP1: {signal['tp1']} | TP4: {signal['tp4']} | SL: {signal['sl']} | RSI: {rsi:.1f}
 
-    - Pair: {signal['symbol']}
-    - Position Side: {side}
-    - Entry Price: {entry}
-    - Current Live Price: {current_price}
-    - Current PnL Percentage: {pnl_pct:.2f}%
-    - TP1: {signal['tp1']} | TP2: {signal['tp2']} | TP3: {signal['tp3']} | TP4: {signal['tp4']}
-    - Stop Loss: {signal['sl']}
-    - Current 15m RSI: {rsi:.2f}
-    - EMA 9: {ema_fast:.4f} | EMA 21: {ema_slow:.4f}
-
-    Instructions:
-    Generate a short, attractive, professional Telegram VIP update message in English with emojis.
-    Determine Action Recommendation: (🟢 HOLD & WAIT, 🎯 MOVE SL TO ENTRY, 💰 TAKE PARTIAL PROFIT, 🔴 CLOSE POSITION NOW).
-    Provide 1 sentence reason explaining WHY based on RSI/Price movement.
-
-    Output format:
-    🤖 **AI TRADE MANAGEMENT UPDATE** 🤖
-
-    📌 **Pair:** #{signal['symbol'].replace('/', '')}
-    📊 **Status:** [Action Recommendation]
-    📈 **Current PnL:** {pnl_pct:+.2f}%
-
-    💡 **AI Analysis:** [1 sentence explanation]
-    🛡️ **Action Plan:** [Clear instructions for members]
+    Generate short Telegram VIP update in English with emojis.
+    Provide Recommendation (🟢 HOLD & WAIT, 🎯 MOVE SL TO ENTRY, 💰 TAKE PARTIAL PROFIT, 🔴 CLOSE POSITION NOW) + 1 sentence reason.
     """
     return call_gemini_api(prompt)
