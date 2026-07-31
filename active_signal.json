@@ -1,1 +1,13 @@
-[]
+[
+    {
+        "symbol": "GRVT/USDT",
+        "side": "LONG \ud83d\udfe2",
+        "entry": 0.2686,
+        "tp1": 0.290596,
+        "tp2": 0.312592,
+        "tp3": 0.334588,
+        "tp4": 0.356584,
+        "sl": 0.246604,
+        "last_status": "INITIAL"
+    }
+]
