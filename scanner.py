@@ -137,14 +137,14 @@ def scan_new_signals():
         except Exception:
             continue
 
-    # Filter Strongest 5 Candidates Only (Lightweight)
+    # Filter Strongest 3 Candidates Only (Super Ultra-Lightweight Payload)
     filtered_candidates = [
         c for c in raw_candidates 
         if c['tv_rating'] in ['BUY', 'STRONG_BUY', 'SELL', 'STRONG_SELL'] or c['ema_cross'] != 'NONE'
-    ][:5]
+    ][:3]
 
     if not filtered_candidates:
-        filtered_candidates = raw_candidates[:4]
+        filtered_candidates = raw_candidates[:3]
 
     if not filtered_candidates:
         print("⚠️ No valid market candidates fetched.")
@@ -171,7 +171,7 @@ def scan_new_signals():
         if not selected_data:
             return
 
-        # Live Realtime Price Re-fetch
+        # Realtime Orderbook Price Fetch
         fresh_ticker = exchange.fetch_ticker(selected_symbol)
         entry = fresh_ticker['last'] if fresh_ticker and 'last' in fresh_ticker else selected_data['price']
         
