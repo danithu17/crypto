@@ -8,9 +8,9 @@ from ai_analyzer import ai_evaluate_market_candidates
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
-TOP_COINS_LIMIT = 25 
+TOP_COINS_LIMIT = 20 
 TIMEFRAME = '15m' 
-MIN_REQUIRED_CANDLES = 100  # 🛑 අලුත් Coins Skip කිරීමට අවම Candles 100ක් (පැය 25k History) තිබිය යුතුය!
+MIN_REQUIRED_CANDLES = 100  # 🛑 අලුත් Coins Skip කිරීමට අවම Candles 100ක්!
 ACTIVE_SIGNAL_FILE = 'active_signal.json'
 MAX_ACTIVE_SIGNALS = 2
 
@@ -84,7 +84,7 @@ def scan_new_signals():
         print(f"⏸️ Active signal slots full ({len(active_signals)}/{MAX_ACTIVE_SIGNALS}). Skipping scan.")
         return
 
-    print(f"🧠 Gathering Market & TradingView Data... (Active Slots: {len(active_signals)}/{MAX_ACTIVE_SIGNALS})")
+    print(f"🧠 Gathering Market Data... (Active Slots: {len(active_signals)}/{MAX_ACTIVE_SIGNALS})")
     
     active_symbols = [s['symbol'] for s in active_signals]
     tickers = exchange.fetch_tickers()
@@ -103,10 +103,9 @@ def scan_new_signals():
             continue
 
         try:
-            # Candles 120ක් Fetch කරගනී
             bars = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=120)
             
-            # 🚨 1. NEW LISTING FILTER: History එකේ Candles 100ට අඩු නම් (අලුත් Coin එකක් නම්) Skip කරයි!
+            # 🚨 NEW LISTING FILTER
             if len(bars) < MIN_REQUIRED_CANDLES:
                 print(f"⚠️ Skipping New Listing {symbol} (Only {len(bars)} candles available, min {MIN_REQUIRED_CANDLES} required).")
                 continue
@@ -121,7 +120,6 @@ def scan_new_signals():
             curr = df.iloc[-1]
             prev = df.iloc[-2]
 
-            # 24h Price Change % Calculation
             first_close = df.iloc[0]['close']
             price_change_pct = ((curr['close'] - first_close) / first_close) * 100
 
@@ -130,32 +128,29 @@ def scan_new_signals():
             raw_candidates.append({
                 "symbol": symbol,
                 "price": curr['close'],
-                "price_change_recent_pct": round(price_change_pct, 2),
-                "volume_24h": usdt_pairs[symbol],
-                "rsi_15m": round(curr['RSI'], 2),
-                "ema9": round(curr['EMA_FAST'], 4),
-                "ema21": round(curr['EMA_SLOW'], 4),
-                "ema_cross": "BULLISH_CROSS" if (prev['EMA_FAST'] <= prev['EMA_SLOW'] and curr['EMA_FAST'] > curr['EMA_SLOW']) else ("BEARISH_CROSS" if (prev['EMA_FAST'] >= prev['EMA_SLOW'] and curr['EMA_FAST'] < curr['EMA_SLOW']) else "NONE"),
+                "change_pct": round(price_change_pct, 1),
+                "rsi": round(curr['RSI'], 1),
+                "ema_cross": "BULLISH" if (prev['EMA_FAST'] <= prev['EMA_SLOW'] and curr['EMA_FAST'] > curr['EMA_SLOW']) else ("BEARISH" if (prev['EMA_FAST'] >= prev['EMA_SLOW'] and curr['EMA_FAST'] < curr['EMA_SLOW']) else "NONE"),
                 "atr": round(curr['ATR'], 6),
-                "tradingview_summary": tv_rec
+                "tv_rating": tv_rec
             })
         except Exception:
             continue
 
-    # Smart Pre-Filter
+    # Filter Strongest 5 Candidates Only (Lightweight)
     filtered_candidates = [
         c for c in raw_candidates 
-        if c['tradingview_summary'] in ['BUY', 'STRONG_BUY', 'SELL', 'STRONG_SELL'] or c['ema_cross'] != 'NONE'
-    ][:8]
+        if c['tv_rating'] in ['BUY', 'STRONG_BUY', 'SELL', 'STRONG_SELL'] or c['ema_cross'] != 'NONE'
+    ][:5]
 
     if not filtered_candidates:
-        filtered_candidates = raw_candidates[:5]
+        filtered_candidates = raw_candidates[:4]
 
     if not filtered_candidates:
         print("⚠️ No valid market candidates fetched.")
         return
 
-    print(f"📊 Sending {len(filtered_candidates)} verified candidates to Gemini AI...")
+    print(f"📊 Sending {len(filtered_candidates)} compressed candidates to Gemini AI...")
 
     # 🤖 AI Market Evaluation
     ai_raw_res = ai_evaluate_market_candidates(filtered_candidates)
@@ -176,12 +171,12 @@ def scan_new_signals():
         if not selected_data:
             return
 
-        # ⚡ 2. REAL-TIME PRICE RE-FETCH (Latest exact price re-verification)
+        # Live Realtime Price Re-fetch
         fresh_ticker = exchange.fetch_ticker(selected_symbol)
         entry = fresh_ticker['last'] if fresh_ticker and 'last' in fresh_ticker else selected_data['price']
         
         atr_val = selected_data['atr']
-        tv_rating = selected_data.get('tradingview_summary', 'N/A')
+        tv_rating = selected_data.get('tv_rating', 'N/A')
 
         tp1 = entry + (atr_val * 2.0) if "LONG" in side else entry - (atr_val * 2.0)
         tp2 = entry + (atr_val * 4.0) if "LONG" in side else entry - (atr_val * 4.0)
@@ -227,7 +222,7 @@ def scan_new_signals():
 🤖 *AI Copilot Active for Live Monitoring!*
 """
         send_telegram_msg(msg)
-        print(f"✅ AI Selected and Sent Signal for {clean_symbol} (Entry: {entry:.{p}f}, TV Rating: {tv_rating})!")
+        print(f"✅ AI Selected and Sent Signal for {clean_symbol} (Entry: {entry:.{p}f})!")
 
     except Exception as e:
         print(f"❌ Failed to parse AI decision JSON: {e}")
