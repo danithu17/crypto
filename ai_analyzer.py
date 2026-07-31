@@ -6,17 +6,17 @@ import time
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 def call_gemini_api(prompt):
-    """ Google Gemini API Call කිරීම (Multi-Endpoint + Multi-Model Fallback) """
+    """ Google Gemini API Call කිරීම (Multi-Model Fallback + Explicit Error Logging) """
     if not GEMINI_API_KEY:
-        print("⚠️ Gemini API Key missing in Secrets!")
+        print("⚠️ GEMINI_API_KEY is missing in GitHub Workflow Secrets environment!")
         return None
 
+    # Working Endpoints and 2026 Stable Models
     api_configs = [
         ("v1beta", "gemini-2.5-flash"),
         ("v1beta", "gemini-2.0-flash"),
-        ("v1", "gemini-1.5-flash"),
         ("v1beta", "gemini-1.5-flash"),
-        ("v1", "gemini-1.5-pro")
+        ("v1", "gemini-1.5-flash")
     ]
 
     for api_version, model in api_configs:
@@ -29,16 +29,18 @@ def call_gemini_api(prompt):
             
             if response.status_code == 200:
                 res_data = response.json()
-                time.sleep(1) # Rate limit guard
+                time.sleep(1) # Rate limit protection
                 return res_data['candidates'][0]['content']['parts'][0]['text']
-        except Exception:
-            continue
+            else:
+                print(f"⚠️ [{api_version}/{model}] API Response ({response.status_code}): {response.text[:150]}")
+        except Exception as e:
+            print(f"❌ Request Exception [{model}]: {e}")
 
-    print("❌ All Gemini API configs failed.")
+    print("❌ All Gemini API configs failed. Please verify GEMINI_API_KEY in Google AI Studio or GitHub Secrets.")
     return None
 
 def ai_evaluate_market_candidates(candidates_data):
-    """ Market Data + TradingView Technical Recommendations විශ්ලේෂණය කිරීම """
+    """ Market Candidate Analysis """
     prompt = f"""
     You are an Expert Crypto Quant Trader AI.
     Analyze these market candidates gathered from 15m timeframe data, including TradingView technical recommendations:
@@ -61,7 +63,7 @@ def ai_evaluate_market_candidates(candidates_data):
     return call_gemini_api(prompt)
 
 def get_ai_trade_decision(signal, current_price, rsi, ema_fast, ema_slow):
-    """ Active Trade එක AI එක හරහා Live Monitor කිරීම """
+    """ Active Trade Live Analysis """
     side = signal['side']
     entry = signal['entry']
     pnl_pct = ((current_price - entry) / entry) * 100 if "LONG" in side else ((entry - current_price) / entry) * 100
