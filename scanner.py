@@ -8,11 +8,18 @@ from ai_analyzer import ai_evaluate_market_candidates
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 CHAT_ID = os.environ.get("CHAT_ID", "")
-TOP_COINS_LIMIT = 20 
+TOP_COINS_LIMIT = 25 
 TIMEFRAME = '15m' 
-MIN_REQUIRED_CANDLES = 100  # 🛑 අලුත් Coins Skip කිරීමට අවම Candles 100ක්!
+MIN_REQUIRED_CANDLES = 100  # 🛑 New Listing Filter (අවම පැය 25ක History එකක් තිබිය යුතුය)
 ACTIVE_SIGNAL_FILE = 'active_signal.json'
 MAX_ACTIVE_SIGNALS = 2
+
+# 🛑 STABLECOIN & FIAT BLACKLIST (මෙම Coins සම්පූර්ණයෙන්ම Skip කෙරේ)
+STABLECOIN_BLACKLIST = {
+    'USDC', 'FDUSD', 'TUSD', 'BUSD', 'DAI', 'USDGO', 'USDE', 'PYUSD', 
+    'USDD', 'FRAX', 'LUSD', 'USDS', 'CUSD', 'EUR', 'GBP', 'AUD', 'CAD',
+    'USDT', 'RLUSD', 'USDJ', 'OUSD', 'AEUR'
+}
 
 exchange = ccxt.mexc({'enableRateLimit': True})
 
@@ -89,11 +96,24 @@ def scan_new_signals():
     active_symbols = [s['symbol'] for s in active_signals]
     tickers = exchange.fetch_tickers()
     
-    usdt_pairs = {
-        k: v.get('quoteVolume', 0) 
-        for k, v in tickers.items() 
-        if k.endswith('/USDT') and '3L' not in k and '3S' not in k and '(' not in k and ')' not in k
-    }
+    usdt_pairs = {}
+    for k, v in tickers.items():
+        if not k.endswith('/USDT'):
+            continue
+        
+        base_coin = k.split('/')[0].upper()
+        
+        # 🛑 1. Filter out Leveraged Tokens (3L, 3S) & Special Symbols with Brackets
+        if '3L' in k or '3S' in k or '(' in k or ')' in k:
+            continue
+
+        # 🛑 2. STABLECOIN FILTER: Skip Blacklisted Stablecoins
+        if base_coin in STABLECOIN_BLACKLIST:
+            print(f"🚫 Skipping Stablecoin: {k}")
+            continue
+
+        usdt_pairs[k] = v.get('quoteVolume', 0)
+
     sorted_symbols = sorted(usdt_pairs, key=usdt_pairs.get, reverse=True)[:TOP_COINS_LIMIT]
 
     raw_candidates = []
@@ -105,23 +125,29 @@ def scan_new_signals():
         try:
             bars = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=120)
             
-            # 🚨 NEW LISTING FILTER
+            # 🛑 3. NEW LISTING FILTER
             if len(bars) < MIN_REQUIRED_CANDLES:
                 print(f"⚠️ Skipping New Listing {symbol} (Only {len(bars)} candles available, min {MIN_REQUIRED_CANDLES} required).")
                 continue
 
             df = pd.DataFrame(bars, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             
+            curr = df.iloc[-1]
+            prev = df.iloc[-2]
+            
+            # 🛑 4. DYNAMIC STABLECOIN / FLAT ASSET FILTER
+            # මිල $0.98 - $1.02 අතර තියෙමින් Volatility එක 0.2% ට වඩා අඩු නම් Flat Asset එකක් ලෙස Skip කරයි
+            first_close = df.iloc[0]['close']
+            price_change_pct = ((curr['close'] - first_close) / first_close) * 100
+            
+            if 0.98 <= curr['close'] <= 1.02 and abs(price_change_pct) < 0.2:
+                print(f"🚫 Skipping Flat/Pegged Asset: {symbol} (Price: {curr['close']}, Change: {price_change_pct:.2f}%)")
+                continue
+
             df['EMA_FAST'] = calculate_ema(df, 9)
             df['EMA_SLOW'] = calculate_ema(df, 21)
             df['RSI'] = calculate_rsi(df, 14)
             df['ATR'] = calculate_atr(df, 14)
-
-            curr = df.iloc[-1]
-            prev = df.iloc[-2]
-
-            first_close = df.iloc[0]['close']
-            price_change_pct = ((curr['close'] - first_close) / first_close) * 100
 
             tv_rec = get_tradingview_recommendation(symbol)
 
@@ -137,7 +163,6 @@ def scan_new_signals():
         except Exception:
             continue
 
-    # Filter Strongest 3 Candidates Only (Super Ultra-Lightweight Payload)
     filtered_candidates = [
         c for c in raw_candidates 
         if c['tv_rating'] in ['BUY', 'STRONG_BUY', 'SELL', 'STRONG_SELL'] or c['ema_cross'] != 'NONE'
@@ -150,65 +175,90 @@ def scan_new_signals():
         print("⚠️ No valid market candidates fetched.")
         return
 
-    print(f"📊 Sending {len(filtered_candidates)} compressed candidates to Gemini AI...")
+    selected_data = None
+    side = None
+    reason = None
+    engine_type = "Gemini AI Analysis"
 
-    # 🤖 AI Market Evaluation
+    # 🤖 1. Primary Check: Gemini AI Call
     ai_raw_res = ai_evaluate_market_candidates(filtered_candidates)
-    
-    if not ai_raw_res or "NO_TRADE" in ai_raw_res:
-        print("🤖 AI Evaluated Markets: No high-probability setup found right now.")
+
+    if ai_raw_res and "NO_TRADE" not in ai_raw_res:
+        try:
+            clean_json = ai_raw_res.replace("```json", "").replace("```", "").strip()
+            ai_decision = json.loads(clean_json)
+
+            selected_symbol = ai_decision['symbol']
+            side = ai_decision['side']
+            reason = ai_decision.get('reason', 'AI High Conviction Setup')
+            selected_data = next((c for c in filtered_candidates if c['symbol'] == selected_symbol), None)
+            engine_type = "Gemini AI Quant Engine"
+        except Exception as e:
+            print(f"Parsing error: {e}")
+
+    # ⚡ 2. Secondary Fallback: Quant Rule Engine (If Gemini API Rate Limited)
+    if not selected_data and ai_raw_res is None:
+        print("⚙️ Gemini AI API unavailable. Activating Quant Rule Engine Fallback...")
+        
+        best_candidate = next(
+            (c for c in filtered_candidates if c['tv_rating'] in ['STRONG_BUY', 'BUY'] and c['ema_cross'] == 'BULLISH' and 35 <= c['rsi'] <= 65),
+            None
+        )
+        if not best_candidate:
+            best_candidate = next(
+                (c for c in filtered_candidates if c['tv_rating'] in ['STRONG_SELL', 'SELL'] and c['ema_cross'] == 'BEARISH' and 35 <= c['rsi'] <= 65),
+                None
+            )
+
+        if best_candidate:
+            selected_data = best_candidate
+            side = "LONG 🟢" if best_candidate['tv_rating'] in ['STRONG_BUY', 'BUY'] else "SHORT 🔴"
+            reason = f"TradingView {best_candidate['tv_rating']} + {best_candidate['ema_cross']} EMA Crossover (Quant Rule Fallback)"
+            engine_type = "Quant Technical Engine (Fallback)"
+
+    if not selected_data:
+        print("🤖 Market Evaluation: No high-probability setup found right now.")
         return
 
-    try:
-        clean_json = ai_raw_res.replace("```json", "").replace("```", "").strip()
-        ai_decision = json.loads(clean_json)
+    # Realtime Orderbook Price Fetch
+    selected_symbol = selected_data['symbol']
+    fresh_ticker = exchange.fetch_ticker(selected_symbol)
+    entry = fresh_ticker['last'] if fresh_ticker and 'last' in fresh_ticker else selected_data['price']
+    
+    atr_val = selected_data['atr']
+    tv_rating = selected_data.get('tv_rating', 'N/A')
 
-        selected_symbol = ai_decision['symbol']
-        side = ai_decision['side']
-        reason = ai_decision.get('reason', 'AI High Conviction Setup')
+    tp1 = entry + (atr_val * 2.0) if "LONG" in side else entry - (atr_val * 2.0)
+    tp2 = entry + (atr_val * 4.0) if "LONG" in side else entry - (atr_val * 4.0)
+    tp3 = entry + (atr_val * 6.0) if "LONG" in side else entry - (atr_val * 6.0)
+    tp4 = entry + (atr_val * 8.0) if "LONG" in side else entry - (atr_val * 8.0)
+    sl = entry - (atr_val * 2.0) if "LONG" in side else entry + (atr_val * 2.0)
 
-        selected_data = next((c for c in filtered_candidates if c['symbol'] == selected_symbol), None)
-        if not selected_data:
-            return
+    new_signal = {
+        'symbol': selected_symbol,
+        'side': side,
+        'entry': entry,
+        'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'tp4': tp4,
+        'sl': sl,
+        'last_status': "INITIAL"
+    }
 
-        # Realtime Orderbook Price Fetch
-        fresh_ticker = exchange.fetch_ticker(selected_symbol)
-        entry = fresh_ticker['last'] if fresh_ticker and 'last' in fresh_ticker else selected_data['price']
-        
-        atr_val = selected_data['atr']
-        tv_rating = selected_data.get('tv_rating', 'N/A')
+    active_signals.append(new_signal)
+    save_active_signals(active_signals)
 
-        tp1 = entry + (atr_val * 2.0) if "LONG" in side else entry - (atr_val * 2.0)
-        tp2 = entry + (atr_val * 4.0) if "LONG" in side else entry - (atr_val * 4.0)
-        tp3 = entry + (atr_val * 6.0) if "LONG" in side else entry - (atr_val * 6.0)
-        tp4 = entry + (atr_val * 8.0) if "LONG" in side else entry - (atr_val * 8.0)
-        sl = entry - (atr_val * 2.0) if "LONG" in side else entry + (atr_val * 2.0)
+    clean_symbol = selected_symbol.replace('/', '')
+    p = 4 if entry >= 1 else 6
 
-        new_signal = {
-            'symbol': selected_symbol,
-            'side': side,
-            'entry': entry,
-            'tp1': tp1, 'tp2': tp2, 'tp3': tp3, 'tp4': tp4,
-            'sl': sl,
-            'last_status': "INITIAL"
-        }
-
-        active_signals.append(new_signal)
-        save_active_signals(active_signals)
-
-        clean_symbol = selected_symbol.replace('/', '')
-        p = 4 if entry >= 1 else 6
-
-        msg = f"""
+    msg = f"""
 📊 **TRADINGVIEW + AI VIP SIGNAL** 🔥
-*(TradingView Technicals + Gemini AI Analysis)*
+*({engine_type})*
 
 📌 **Pair:** #{clean_symbol}
 📊 **Action:** {side}
 🎯 **Entry Price:** `{entry:.{p}f}`
 
 📈 **TV Recommendation:** `{tv_rating}`
-💡 **AI Reason:** {reason}
+💡 **Setup Reason:** {reason}
 
 💰 **Take-Profit Targets:**
 1️⃣ TP1: `{tp1:.{p}f}`
@@ -221,11 +271,8 @@ def scan_new_signals():
 
 🤖 *AI Copilot Active for Live Monitoring!*
 """
-        send_telegram_msg(msg)
-        print(f"✅ AI Selected and Sent Signal for {clean_symbol} (Entry: {entry:.{p}f})!")
-
-    except Exception as e:
-        print(f"❌ Failed to parse AI decision JSON: {e}")
+    send_telegram_msg(msg)
+    print(f"✅ Selected and Sent Signal for {clean_symbol} via {engine_type}!")
 
 if __name__ == '__main__':
     scan_new_signals()
