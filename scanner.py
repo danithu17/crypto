@@ -44,8 +44,7 @@ def get_tradingview_recommendation(symbol):
         )
         analysis = handler.get_analysis()
         return analysis.summary.get('RECOMMENDATION', 'NEUTRAL')
-    except Exception as e:
-        print(f"⚠️ TradingView TA Error for {symbol}: {e}")
+    except Exception:
         return "NEUTRAL"
 
 def calculate_ema(df, length):
@@ -88,7 +87,13 @@ def scan_new_signals():
     
     active_symbols = [s['symbol'] for s in active_signals]
     tickers = exchange.fetch_tickers()
-    usdt_pairs = {k: v.get('quoteVolume', 0) for k, v in tickers.items() if k.endswith('/USDT') and '3L' not in k and '3S' not in k}
+    
+    # 🎯 Filter out Leveraged tokens (3L, 3S) & Special tokens containing brackets ()
+    usdt_pairs = {
+        k: v.get('quoteVolume', 0) 
+        for k, v in tickers.items() 
+        if k.endswith('/USDT') and '3L' not in k and '3S' not in k and '(' not in k and ')' not in k
+    }
     sorted_symbols = sorted(usdt_pairs, key=usdt_pairs.get, reverse=True)[:TOP_COINS_LIMIT]
 
     market_candidates = []
@@ -109,7 +114,6 @@ def scan_new_signals():
             curr = df.iloc[-1]
             prev = df.iloc[-2]
 
-            # Live TradingView Recommendation
             tv_rec = get_tradingview_recommendation(symbol)
 
             market_candidates.append({
@@ -130,7 +134,7 @@ def scan_new_signals():
         print("⚠️ No valid market candidates fetched.")
         return
 
-    # 🤖 TradingView + Market Data AI Evaluation
+    # 🤖 AI Market Evaluation Call
     ai_raw_res = ai_evaluate_market_candidates(market_candidates)
     
     if not ai_raw_res or "NO_TRADE" in ai_raw_res:
