@@ -1,17 +1,1 @@
-[
-    {
-        "symbol": "SOL/USDT",
-        "side": "LONG \ud83d\udfe2",
-        "entry": 75.59,
-        "tp1": 75.9856872604407,
-        "tp2": 76.38137452088138,
-        "tp3": 76.77706178132208,
-        "tp4": 77.17274904176276,
-        "sl": 75.19431273955931,
-        "tp1_hit": true,
-        "last_pnl": 0.5688583145918674,
-        "last_status": "ACTION_TAKEN",
-        "tp2_hit": true,
-        "tp3_hit": true
-    }
-]
+[]
