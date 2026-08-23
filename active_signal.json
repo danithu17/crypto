@@ -10,6 +10,7 @@
         "sl": 77314.27128514125,
         "last_pnl": 0.08721753471074571,
         "last_status": "HOLD & WAIT",
-        "tp1_hit": true
+        "tp1_hit": true,
+        "tp2_hit": true
     }
 ]
