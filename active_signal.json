@@ -1,17 +1,1 @@
-[
-    {
-        "symbol": "ETH/USDT",
-        "side": "LONG \ud83d\udfe2",
-        "entry": 2459.58,
-        "tp1": 2476.995971281517,
-        "tp2": 2494.4119425630342,
-        "tp3": 2511.8279138445514,
-        "tp4": 2529.2438851260686,
-        "sl": 2442.1640287184828,
-        "last_pnl": 1.6104375543792082,
-        "last_status": "ACTION_TAKEN",
-        "tp1_hit": true,
-        "tp2_hit": true,
-        "tp3_hit": true
-    }
-]
+[]
