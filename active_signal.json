@@ -9,6 +9,7 @@
         "tp4": 74623.70705384025,
         "sl": 78406.57323653993,
         "last_pnl": 0.5178364455891897,
-        "last_status": "ACTION_TAKEN"
+        "last_status": "ACTION_TAKEN",
+        "tp1_hit": true
     }
 ]
