@@ -9,6 +9,7 @@
         "tp4": 0.9997958336415258,
         "sl": 1.0002635415896186,
         "last_pnl": -0.0019996600577810754,
-        "last_status": "HOLD & WAIT"
+        "last_status": "HOLD & WAIT",
+        "tp1_hit": true
     }
 ]
