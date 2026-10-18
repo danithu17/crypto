@@ -1,17 +1,1 @@
-[
-    {
-        "symbol": "LIT/USDT",
-        "side": "SHORT \ud83d\udd34",
-        "entry": 3.1949,
-        "tp1": 3.156405735827751,
-        "tp2": 3.1179114716555016,
-        "tp3": 3.0794172074832526,
-        "tp4": 3.0409229433110037,
-        "sl": 3.233394264172249,
-        "last_pnl": 4.616732918088202,
-        "last_status": "ACTION_TAKEN",
-        "tp1_hit": true,
-        "tp2_hit": true,
-        "tp3_hit": true
-    }
-]
+[]
