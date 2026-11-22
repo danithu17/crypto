@@ -8,7 +8,8 @@
         "tp3": 0.5456899430049746,
         "tp4": 0.5545199240066329,
         "sl": 0.5103700189983418,
-        "last_pnl": 0.731895223420652,
-        "last_status": "HOLD & WAIT"
+        "last_pnl": 2.272727272727279,
+        "last_status": "ACTION_TAKEN",
+        "tp1_hit": true
     }
 ]
